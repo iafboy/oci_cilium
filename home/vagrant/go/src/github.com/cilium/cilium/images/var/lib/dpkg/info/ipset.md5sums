@@ -1,0 +1,6 @@
+58f272780aa17a08a759ec43475afee8  usr/sbin/ipset
+eebebaff9c42fe3bfc602edc8e99b7f8  usr/share/bash-completion/completions/ipset
+18d2d08bf7d325f91cdac81ba9b8d4f5  usr/share/doc/ipset/README
+332db0d2c6aaead40780974072c6db69  usr/share/doc/ipset/copyright
+0621e6a5d1f454c2a4d663ca592071cc  usr/share/man/man8/ipset-translate.8.gz
+83e882030086d1972babfc93a35206cf  usr/share/man/man8/ipset.8.gz
