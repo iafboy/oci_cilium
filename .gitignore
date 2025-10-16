@@ -120,3 +120,4 @@ bpf/.cache
 # Include dummy bpf object necessary for XDP_TX
 !test/l4lb/bpf_xdp_veth_host.o
 oci.operator
+oci.operator
