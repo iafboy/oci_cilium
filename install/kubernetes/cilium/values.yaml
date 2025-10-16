@@ -9,7 +9,7 @@
 
 debug:
   # -- Enable debug logging
-  enabled: false
+  enabled: true
   # verbose:
 
 rbac:
@@ -298,6 +298,11 @@ alibabacloud:
   # -- Enable AlibabaCloud ENI integration
   enabled: false
 
+oci:
+  # -- Enable OCI NPN integration
+  enabled: false
+  VCNID: ocid1.vcn.oc1.eu-frankfurt-1.amaaaaaay5l3z3ya3i6hi5n42zl3vfyj7tilsjqwules5mz7s4zgad2as4pq 
+
 # -- Enable bandwidth manager to optimize TCP and UDP workloads and allow
 # for rate-limiting traffic from individual Pods with EDT (Earliest Departure
 # Time) through the "kubernetes.io/egress-bandwidth" Pod annotation.
@@ -566,6 +571,7 @@ enableK8sEventHandover: false
 
 # -- Enable setting identity mark for local traffic.
 # enableIdentityMark: true
+enableIdentityMark: false
 
 # -- Enable Kubernetes EndpointSlice feature in Cilium if the cluster supports it.
 # enableK8sEndpointSlice: true
@@ -747,7 +753,7 @@ eni:
 
 externalIPs:
   # -- Enable ExternalIPs service support.
-  enabled: false
+  enabled: true
 
 # fragmentTracking enables IPv4 fragment tracking support in the datapath.
 # fragmentTracking: true
@@ -769,12 +775,12 @@ hostFirewall:
 
 hostPort:
   # -- Enable hostPort service support.
-  enabled: false
+  enabled: true
 
 # -- Configure socket LB
 socketLB:
   # -- Enable socket LB
-  enabled: false
+  enabled: true
 
   # -- Disable socket lb for non-root ns. This is used to enable Istio routing rules.
   # hostNamespaceOnly: false
@@ -1318,7 +1324,7 @@ ipam:
     # IPv4 CIDR range to delegate to individual nodes for IPAM.
     clusterPoolIPv4PodCIDR: "10.0.0.0/8"
     # -- IPv4 CIDR list range to delegate to individual nodes for IPAM.
-    clusterPoolIPv4PodCIDRList: []
+    clusterPoolIPv4PodCIDRList: ["10.0.30.0/24"]
     # -- IPv4 CIDR mask size to delegate to individual nodes for IPAM.
     clusterPoolIPv4MaskSize: 24
     # -- Deprecated in favor of ipam.operator.clusterPoolIPv6PodCIDRList.
@@ -1394,6 +1400,8 @@ readinessProbe:
 # Valid options are "disabled", "partial", "strict".
 # ref: https://docs.cilium.io/en/stable/gettingstarted/kubeproxy-free/
 #kubeProxyReplacement: "disabled"
+#kubeProxyReplacement: "strict"
+kubeProxyReplacement: "strict"
 
 # -- healthz server bind address for the kube-proxy replacement.
 # To enable set the value to '0.0.0.0:10256' for all ipv4
@@ -1474,7 +1482,7 @@ vtep:
 # direct routing and the Kubernetes CIDR is included in the native routing CIDR,
 # the user must configure the routes to reach pods, either manually or by
 # setting the auto-direct-node-routes flag.
-ipv4NativeRoutingCIDR: ""
+ipv4NativeRoutingCIDR: "10.0.30.0/24"
 
 # -- (string) Allows to explicitly specify the IPv6 CIDR for native routing.
 # When specified, Cilium assumes networking for this CIDR is preconfigured and
@@ -1543,7 +1551,7 @@ loadBalancer:
 # -- Configure N-S k8s service loadbalancing
 nodePort:
   # -- Enable the Cilium NodePort service implementation.
-  enabled: false
+  enabled: true
 
   # -- Port range to use for NodePort services.
   # range: "30000,32767"
@@ -1677,7 +1685,7 @@ tls:
 #   - disabled
 #   - vxlan (default)
 #   - geneve
-tunnel: "vxlan"
+tunnel: "disabled"
 
 # -- Configure VXLAN and Geneve tunnel port.
 # @default -- Port 8472 for VXLAN, Port 6081 for Geneve
@@ -1811,7 +1819,7 @@ operator:
     suffix: "-ci"
 
   # -- Number of replicas to run for the cilium-operator deployment
-  replicas: 2
+  replicas: 1
 
   # -- The priority class to use for cilium-operator
   priorityClassName: ""
@@ -1858,7 +1866,9 @@ operator:
     #   effect: "NoSchedule|PreferNoSchedule|NoExecute(1.6 only)"
 
   # -- Additional cilium-operator container arguments.
-  extraArgs: []
+  extraArgs:
+    -  --oci-vcn-id=ocid1.vcn.oc1.eu-frankfurt-1.amaaaaaay5l3z3ya3i6hi5n42zl3vfyj7tilsjqwules5mz7s4zgad2as4pq
+    -  --subnet-tags-filter=podSubnet=True
 
   # -- Additional cilium-operator environment variables.
   extraEnv: []
@@ -2448,3 +2458,6 @@ dnsProxy:
 sctp:
   # -- Enable SCTP support. NOTE: Currently, SCTP support does not support rewriting ports or multihoming.
   enabled: false
+
+#enableHostPort: true
+#enableNodePort: true

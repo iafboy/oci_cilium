@@ -183,7 +183,7 @@ func (m *InstancesManager) FindSubnet(vpc, ad string, toAllocate int, subnetTags
 			scopedLog.Info("FindSubnet: skip this subnet due to VCN mismatch")
 			continue
 		}
-
+                /* comment code block because regional VCN has no AD info. 
 		if subnet.AvailabilityZone == "" {
 			scopedLog.Debug("FindSubnet: skip availability domain filter as this is an OCI regional subnet")
 		} else {
@@ -192,6 +192,7 @@ func (m *InstancesManager) FindSubnet(vpc, ad string, toAllocate int, subnetTags
 				continue
 			}
 		}
+		*/
 
 		if subnet.AvailableAddresses < toAllocate {
 			scopedLog.Info("FindSubnet: skip this subnet due toAllocate too big")

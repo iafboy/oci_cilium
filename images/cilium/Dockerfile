@@ -9,12 +9,12 @@ ARG CILIUM_RUNTIME_IMAGE=quay.io/cilium/cilium-runtime:2c39e89fbabb2e2f13263482d
 
 # cilium-envoy from github.com/cilium/proxy
 #
-FROM quay.io/cilium/cilium-envoy:ff9a74a473dd5c1f6bfd7ce10938dab648f70c09@sha256:35afe14537ebf9fcfe4ab3d9488ec7f884bc2661da73383294f9b72deee82cfe as cilium-envoy
+FROM quay.io/cilium/cilium-envoy:ff9a74a473dd5c1f6bfd7ce10938dab648f70c09@sha256:35afe14537ebf9fcfe4ab3d9488ec7f884bc2661da73383294f9b72deee82cfe AS cilium-envoy
 
 #
 # Hubble CLI
 #
-FROM --platform=${BUILDPLATFORM} ${CILIUM_BUILDER_IMAGE} as hubble
+FROM --platform=${BUILDPLATFORM} ${CILIUM_BUILDER_IMAGE} AS hubble
 ARG BUILDPLATFORM
 COPY images/cilium/hubble-version.sh /tmp/hubble-version.sh
 COPY images/cilium/download-hubble.sh /tmp/download-hubble.sh
@@ -31,7 +31,7 @@ RUN /out/${BUILDPLATFORM}/bin/hubble completion bash > /out/linux/bash_completio
 # versions to be built while allowing the new versions to make changes
 # that are not backwards compatible.
 #
-FROM --platform=${BUILDPLATFORM} ${CILIUM_BUILDER_IMAGE} as builder
+FROM --platform=${BUILDPLATFORM} ${CILIUM_BUILDER_IMAGE} AS builder
 
 # TARGETOS is an automatic platform ARG enabled by Docker BuildKit.
 ARG TARGETOS
@@ -76,7 +76,7 @@ COPY images/cilium/init-container.sh \
 # built while allowing the new versions to make changes that are not
 # backwards compatible.
 #
-FROM ${CILIUM_RUNTIME_IMAGE} as release
+FROM ${CILIUM_RUNTIME_IMAGE} AS release
 # TARGETOS is an automatic platform ARG enabled by Docker BuildKit.
 ARG TARGETOS
 # TARGETARCH is an automatic platform ARG enabled by Docker BuildKit.
@@ -104,7 +104,7 @@ CMD ["/usr/bin/cilium"]
 # image, install delve debugger and wrap the cilium-agent binary calls
 # with a script that automatically provisions the debugger on a
 # dedicated port.
-FROM release as debug
+FROM release AS debug
 # TARGETOS is an automatic platform ARG enabled by Docker BuildKit.
 ARG TARGETOS
 # TARGETARCH is an automatic platform ARG enabled by Docker BuildKit.

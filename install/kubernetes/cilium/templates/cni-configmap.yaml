@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cilium-cni-config
+  namespace: cilium
+data:
+  05-cilium.conflist: |
+    {
+      "cniVersion": "0.3.1",
+      "name": "cilium",
+      "log-file": "/var/run/cilium/cilium-cni.log",
+      "plugins": [
+        {
+          "type": "cilium-cni",
+          "oci": {
+            "vcn-id": {{ .Values.oci.VCNID | quote }}
+          },
+          "ipam": {
+            "min-allocate": 15,
+            "pre-allocate": 10,
+            "max-above-watermark": 5
+          }
+        }
+      ]
+    }

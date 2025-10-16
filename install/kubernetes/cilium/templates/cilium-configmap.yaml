@@ -542,6 +542,14 @@ data:
 {{- end }}
 
   auto-direct-node-routes: {{ .Values.autoDirectNodeRoutes | quote }}
+  routing-mode: "native"
+  enable-dns-proxy: "true"
+  enable-endpoint-routes: "true"
+  enable-external-ips: "true"
+  enable-host-port: "true"
+  enable-node-port: "true"
+  enable-socket-lb: "true"
+  enable-local-node-route: "false"
 
 {{- if hasKey .Values "bandwidthManager" }}
 {{- if .Values.bandwidthManager.enabled }}

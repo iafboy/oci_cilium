@@ -7,13 +7,13 @@ ARG TESTER_IMAGE=quay.io/cilium/image-tester:dd09c8d3ef349a909fbcdc99279516baef1
 ARG GOLANG_IMAGE=docker.io/library/golang:1.19.3@sha256:10e3c0f39f8e237baa5b66c5295c578cac42a99536cc9333d8505324a82407d9
 ARG CILIUM_LLVM_IMAGE=quay.io/cilium/cilium-llvm:3408daa17f6490a464dfc746961e28ae31964c66@sha256:ff13a1a9f973d102c6ac907d2bc38a524c8e1d26c6c1b16ed809a98925206a79
 
-FROM ${COMPILERS_IMAGE} as compilers-image
+FROM ${COMPILERS_IMAGE} AS compilers-image
 
-FROM ${GOLANG_IMAGE} as golang-dist
+FROM ${GOLANG_IMAGE} AS golang-dist
 
-FROM ${CILIUM_LLVM_IMAGE} as llvm-dist
+FROM ${CILIUM_LLVM_IMAGE} AS llvm-dist
 
-FROM ${CILIUM_RUNTIME_IMAGE} as rootfs
+FROM ${CILIUM_RUNTIME_IMAGE} AS rootfs
 
 # Change the number to force the generation of a new git-tree SHA. Useful when
 # we want to re-run 'apt-get upgrade' for stale images.
@@ -68,7 +68,7 @@ RUN --mount=type=bind,readwrite,target=/go/src/github.com/cilium/cilium/images/b
 # used to facilitate the verifier tests
 COPY --from=llvm-dist /usr/local/bin/llvm-objcopy /bin/
 
-FROM ${TESTER_IMAGE} as test
+FROM ${TESTER_IMAGE} AS test
 COPY --from=rootfs / /
 COPY test /test
 RUN /test/bin/cst
