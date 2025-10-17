@@ -39,7 +39,15 @@ type OCIAPI interface {
 	WaitVNICAttached(ctx context.Context, vnicAttachmentID string) (*vnicTypes.VNIC, error)
 	AssignPrivateIPAddresses(ctx context.Context, eniID string, toAllocate int) ([]string, error)
 	UnassignPrivateIPAddresses(ctx context.Context, eniID string, addresses []string) error
+	GetInstance(ctx context.Context, instanceID string) (*types.Instance, error)
+	GetVnicAttachments(ctx context.Context, compartmentID string, instanceID *string) ([]types.VnicAttachment, error)
+	GetVnic(ctx context.Context, vnicID string) (*types.Vnic, error)
+	ListPrivateIPs(ctx context.Context, vnicID string) ([]types.PrivateIP, error)
 }
+
+// func (o OCIAPI) GetInstance(ctx context.Context, d string) (any, any) {
+// 	panic("unimplemented")
+// } del by dw
 
 // InstancesManager maintains the list of instances. It must be kept up to date
 // by calling resync() regularly.
@@ -240,4 +248,94 @@ func (m *InstancesManager) HasInstance(instanceID string) bool {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 	return m.instances.Exists(instanceID)
+}
+
+// InstanceSync syncs the instance data for a specific instance
+func (m *InstancesManager) InstanceSync(ctx context.Context, instanceID string) time.Time {
+	resyncStart := time.Now()
+
+	// We still need VCNs and subnets information
+	vcns, err := m.api.ListVCNs(ctx)
+	if err != nil {
+		log.WithError(err).Warning("Unable to synchronize VPC list")
+		return time.Time{}
+	}
+
+	subnets, err := m.api.ListSubnets(ctx)
+	if err != nil {
+		log.WithError(err).Warning("Unable to retrieve subnets list")
+		return time.Time{}
+	}
+
+	// Create a new instance map for this specific instance
+	instances := ipamTypes.NewInstanceMap()
+
+	instance, err := m.api.GetInstance(ctx, instanceID)
+	if err != nil {
+		log.WithError(err).Warning("Unable to get instance details")
+		return time.Time{}
+	}
+
+	vnicAttachments, err := m.api.GetVnicAttachments(ctx, instance.CompartmentId, &instance.Id)
+	if err != nil {
+		log.WithError(err).Warning("Unable to get VNIC attachments")
+		return time.Time{}
+	}
+
+	for _, va := range vnicAttachments {
+		if va.VnicId == "" {
+			continue
+		}
+
+		v, err := m.api.GetVnic(ctx, va.VnicId)
+		if err != nil {
+			log.WithError(err).Warning("Unable to get VNIC details")
+			continue
+		}
+
+		vnic := &vnicTypes.VNIC{
+			ID:        va.VnicId,
+			IsPrimary: *v.IsPrimary,
+			Subnet: vnicTypes.OciSubnet{
+				ID: *v.SubnetId,
+			},
+			VCN: vnicTypes.OciVCN{
+				ID: instance.CompartmentId,
+			},
+			Addresses: []string{},
+		}
+
+		if v.PrivateIp != nil {
+			vnic.Addresses = append(vnic.Addresses, *v.PrivateIp)
+		}
+
+		privateIPs, err := m.api.ListPrivateIPs(ctx, va.VnicId)
+		if err != nil {
+			log.WithError(err).Warning("Unable to list private IPs")
+			continue
+		}
+
+		for _, ip := range privateIPs {
+			if ip.IpAddress != nil {
+				vnic.Addresses = append(vnic.Addresses, *ip.IpAddress)
+			}
+		}
+
+		instances.Update(instanceID, ipamTypes.InterfaceRevision{
+			Resource: vnic,
+		})
+	}
+
+	m.mutex.Lock()
+	// Update only this instance in the map
+	m.instances.Delete(instanceID)
+	m.instances.ForeachInterface(instanceID, func(instanceID, interfaceID string, rev ipamTypes.InterfaceRevision) error {
+		m.instances.Update(instanceID, rev)
+		return nil
+	})
+	m.vcns = vcns
+	m.subnets = subnets
+	m.mutex.Unlock()
+
+	return resyncStart
 }

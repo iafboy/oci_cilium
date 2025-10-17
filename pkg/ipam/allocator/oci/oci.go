@@ -97,7 +97,7 @@ func (a *AllocatorOCI) Start(ctx context.Context, getterUpdater ipam.CiliumNodeG
 
 	var iMetrics ipam.MetricsAPI
 	if operatorOption.Config.EnableMetrics {
-		iMetrics = ipamMetrics.NewPrometheusMetrics(operatorMetrics.Namespace, operatorMetrics.Registry)
+		iMetrics = ipamMetrics.NewPrometheusMetrics("cilium_operator", operatorMetrics.Registry)
 	} else {
 		iMetrics = &ipamMetrics.NoOpMetrics{}
 	}

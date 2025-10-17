@@ -18,7 +18,58 @@ import (
 	ipamTypes "github.com/cilium/cilium/pkg/ipam/types"
 )
 
-// SecurityGroup is the representation of an AlibabaCloud Security Group
+// Instance represents an OCI compute instance
+type Instance struct {
+	// Id is the instance ID
+	Id string
+
+	// CompartmentId is the compartment ID where the instance resides
+	CompartmentId string
+
+	// DisplayName is the display name of the instance
+	DisplayName string
+}
+
+// VnicAttachment represents an OCI VNIC attachment
+type VnicAttachment struct {
+	// Id is the VNIC attachment ID
+	Id string
+
+	// VnicId is the ID of the attached VNIC
+	VnicId string
+
+	// InstanceId is the ID of the instance this VNIC is attached to
+	InstanceId string
+
+	// DisplayName is the display name of the VNIC attachment
+	DisplayName string
+}
+
+// Vnic represents an OCI VNIC
+type Vnic struct {
+	// Id is the VNIC ID
+	Id *string
+
+	// IsPrimary indicates if this is the primary VNIC
+	IsPrimary *bool
+
+	// SubnetId is the ID of the subnet this VNIC is in
+	SubnetId *string
+
+	// PrivateIp is the primary private IP address of the VNIC
+	PrivateIp *string
+}
+
+// PrivateIP represents an OCI private IP
+type PrivateIP struct {
+	// Id is the private IP ID
+	Id *string
+
+	// IpAddress is the private IP address
+	IpAddress *string
+}
+
+// SecurityGroup is the representation of an OCI Security Group
 //
 // +k8s:deepcopy-gen=true
 type SecurityGroup struct {

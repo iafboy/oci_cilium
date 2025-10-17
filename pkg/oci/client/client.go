@@ -53,6 +53,99 @@ type OCIClient struct {
 	ResourceSearchClient *resourcesearch.ResourceSearchClient
 }
 
+func (c *OCIClient) GetInstance(ctx context.Context, instanceID string) (*types.Instance, error) {
+	resp, err := c.ComputeClient.GetInstance(ctx, core.GetInstanceRequest{
+		InstanceId: &instanceID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get instance %s: %w", instanceID, err)
+	}
+
+	instance := &types.Instance{
+		Id:            *resp.Id,
+		CompartmentId: *resp.CompartmentId,
+	}
+	if resp.DisplayName != nil {
+		instance.DisplayName = *resp.DisplayName
+	}
+
+	return instance, nil
+}
+
+func (c *OCIClient) GetVnicAttachments(ctx context.Context, compartmentID string, instanceID *string) ([]types.VnicAttachment, error) {
+	request := core.ListVnicAttachmentsRequest{
+		CompartmentId: &compartmentID,
+		InstanceId:    instanceID,
+	}
+	resp, err := c.ComputeClient.ListVnicAttachments(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.Items == nil || len(resp.Items) == 0 {
+		return nil, nil
+	}
+
+	result := make([]types.VnicAttachment, 0, len(resp.Items))
+	for _, item := range resp.Items {
+		attachment := types.VnicAttachment{
+			Id:          *item.Id,
+			VnicId:      *item.VnicId,
+			InstanceId:  *item.InstanceId,
+			DisplayName: *item.DisplayName,
+		}
+		result = append(result, attachment)
+	}
+
+	return result, nil
+}
+
+func (c *OCIClient) GetVnic(ctx context.Context, vnicID string) (*types.Vnic, error) {
+	resp, err := c.VirtualNetworkClient.GetVnic(ctx, core.GetVnicRequest{
+		VnicId: &vnicID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	vnic := &types.Vnic{
+		Id:        resp.Vnic.Id,
+		SubnetId:  resp.Vnic.SubnetId,
+		IsPrimary: resp.Vnic.IsPrimary,
+		PrivateIp: resp.Vnic.PrivateIp,
+	}
+
+	return vnic, nil
+}
+
+func (c *OCIClient) ListPrivateIPs(ctx context.Context, vnicID string) ([]types.PrivateIP, error) {
+	request := core.ListPrivateIpsRequest{
+		VnicId: &vnicID,
+	}
+	resp, err := c.VirtualNetworkClient.ListPrivateIps(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.Items == nil || len(resp.Items) == 0 {
+		return nil, nil
+	}
+
+	result := make([]types.PrivateIP, 0, len(resp.Items))
+	for _, item := range resp.Items {
+		if *item.IsPrimary {
+			continue
+		}
+		privateIP := types.PrivateIP{
+			Id:        item.Id,
+			IpAddress: item.IpAddress,
+		}
+		result = append(result, privateIP)
+	}
+
+	return result, nil
+}
+
 func (c *OCIClient) ListVCNs(ctx context.Context) (ipamTypes.VirtualNetworkMap, error) {
 	result := ipamTypes.VirtualNetworkMap{}
 

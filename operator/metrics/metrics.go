@@ -19,6 +19,9 @@ import (
 	"github.com/cilium/cilium/pkg/metrics/metric"
 )
 
+// Namespace represents the metrics namespace for cilium-operator
+var Namespace = "cilium_operator"
+
 type params struct {
 	cell.In
 

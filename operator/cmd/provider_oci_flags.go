@@ -6,15 +6,24 @@
 package cmd
 
 import (
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+
 	operatorOption "github.com/cilium/cilium/operator/option"
 	"github.com/cilium/cilium/pkg/option"
 )
 
 func init() {
-	flags := rootCmd.Flags()
+	FlagsHooks = append(FlagsHooks, &ociFlagsHooks{})
+}
+
+type ociFlagsHooks struct{}
+
+func (h *ociFlagsHooks) RegisterProviderFlag(cmd *cobra.Command, vp *viper.Viper) {
+	flags := cmd.Flags()
 
 	flags.String(operatorOption.OCIVCNID, "", "Specific VCN ID for OCI ENI. If not set use same VCN as operator")
-	option.BindEnv(Vp, operatorOption.OCIVCNID)
+	option.BindEnv(vp, operatorOption.OCIVCNID)
 
-	Vp.BindPFlags(flags)
+	vp.BindPFlags(flags)
 }

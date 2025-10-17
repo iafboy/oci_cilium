@@ -20,6 +20,8 @@ import (
 
 	"github.com/cilium/cilium/pkg/defaults"
 	"github.com/cilium/cilium/pkg/ipam"
+	"github.com/cilium/cilium/pkg/ipam/stats"
+	"github.com/cilium/cilium/pkg/ipam/types"
 	ipamTypes "github.com/cilium/cilium/pkg/ipam/types"
 	v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	"github.com/cilium/cilium/pkg/lock"
@@ -186,56 +188,194 @@ func (n *Node) CreateInterface(ctx context.Context, allocation *ipam.AllocationA
 
 // ResyncInterfacesAndIPs is called to retrieve and VNICs and IPs as known to
 // the OCI API and return them
-func (n *Node) ResyncInterfacesAndIPs(ctx context.Context, scopedLog *logrus.Entry) (available ipamTypes.AllocationMap, remainAvailableVNICsCount int, err error) {
+// func (n *Node) ResyncInterfacesAndIPs(ctx context.Context, scopedLog *logrus.Entry) (available ipamTypes.AllocationMap, remainAvailableVNICsCount int, err error) {
+// 	l, limitsAvailable := n.getLimits()
+// 	if !limitsAvailable {
+// 		return nil, -1, fmt.Errorf(errUnableToDetermineLimits)
+// 	}
+
+// 	instanceID := n.node.InstanceID()
+// 	available = ipamTypes.AllocationMap{}
+
+// 	n.mutex.Lock()
+// 	defer n.mutex.Unlock()
+// 	n.vnics = map[string]vnicTypes.VNIC{}
+
+// 	n.manager.ForeachInstance(instanceID,
+// 		func(instanceID, interfaceID string, rev ipamTypes.InterfaceRevision) error {
+// 			e, ok := rev.Resource.(*vnicTypes.VNIC)
+// 			if !ok {
+// 				log.Info("rev.Resource.(*vnicTypes.VNIC) failed")
+// 				return nil
+// 			}
+
+// 			n.vnics[e.ID] = *e
+// 			if e.IsPrimary {
+// 				log.Debug("Skip primary VNIC for OCI ResyncInterfacesAndIPs")
+// 				return nil
+// 			}
+
+// 			availableOnENI := math.IntMax(l.IPv4-len(e.Addresses), 0)
+// 			if availableOnENI > 0 {
+// 				remainAvailableVNICsCount++
+// 			}
+
+// 			for _, ip := range e.Addresses {
+// 				available[ip] = ipamTypes.AllocationIP{Resource: e.ID}
+// 			}
+
+// 			return nil
+// 		})
+
+// 	vnics := len(n.vnics)
+
+// 	// An OCI instance has at least one VNIC attached, no VNIC found implies instance not found.
+// 	if vnics == 0 {
+// 		scopedLog.Warning("OCI instance not found! Please delete corresponding ciliumnode if instance has already been deleted.")
+// 		return nil, -1, fmt.Errorf("unable to retrieve VNICs")
+// 	}
+// 	remainAvailableVNICsCount += l.Adapters - len(n.vnics)
+
+//		return available, remainAvailableVNICsCount, nil
+//	}
+func (n *Node) ResyncInterfacesAndIPs(ctx context.Context, log *logrus.Entry) (types.AllocationMap, stats.InterfaceStats, error) {
 	l, limitsAvailable := n.getLimits()
 	if !limitsAvailable {
-		return nil, -1, fmt.Errorf(errUnableToDetermineLimits)
+		return nil, stats.InterfaceStats{}, fmt.Errorf(errUnableToDetermineLimits)
 	}
 
-	instanceID := n.node.InstanceID()
-	available = ipamTypes.AllocationMap{}
+	available := types.AllocationMap{}
+	interfaceStats := stats.InterfaceStats{}
 
+	instance, err := n.manager.api.GetInstance(ctx, n.instanceID)
+	if err != nil {
+		return nil, interfaceStats, err
+	}
+
+	// Lock to update vnics map
 	n.mutex.Lock()
 	defer n.mutex.Unlock()
-	n.vnics = map[string]vnicTypes.VNIC{}
+	n.vnics = map[string]vnicTypes.VNIC{} // Reset vnics map
 
-	n.manager.ForeachInstance(instanceID,
-		func(instanceID, interfaceID string, rev ipamTypes.InterfaceRevision) error {
-			e, ok := rev.Resource.(*vnicTypes.VNIC)
-			if !ok {
-				log.Info("rev.Resource.(*vnicTypes.VNIC) failed")
-				return nil
-			}
-
-			n.vnics[e.ID] = *e
-			if e.IsPrimary {
-				log.Debug("Skip primary VNIC for OCI ResyncInterfacesAndIPs")
-				return nil
-			}
-
-			availableOnENI := math.IntMax(l.IPv4-len(e.Addresses), 0)
-			if availableOnENI > 0 {
-				remainAvailableVNICsCount++
-			}
-
-			for _, ip := range e.Addresses {
-				available[ip] = ipamTypes.AllocationIP{Resource: e.ID}
-			}
-
-			return nil
-		})
-
-	vnics := len(n.vnics)
-
-	// An OCI instance has at least one VNIC attached, no VNIC found implies instance not found.
-	if vnics == 0 {
-		scopedLog.Warning("OCI instance not found! Please delete corresponding ciliumnode if instance has already been deleted.")
-		return nil, -1, fmt.Errorf("unable to retrieve VNICs")
+	vnicAttachments, err := n.manager.api.GetVnicAttachments(ctx, instance.CompartmentId, &instance.Id)
+	if err != nil {
+		return nil, interfaceStats, err
 	}
-	remainAvailableVNICsCount += l.Adapters - len(n.vnics)
 
-	return available, remainAvailableVNICsCount, nil
+	nonPrimaryVNICs := 0
+
+	for _, vnicAttachment := range vnicAttachments {
+		v, err := n.manager.api.GetVnic(ctx, vnicAttachment.VnicId)
+		if err != nil {
+			return nil, interfaceStats, err
+		}
+
+		// Initialize VNIC entry
+		vnic := vnicTypes.VNIC{
+			ID:        *v.Id,
+			IsPrimary: *v.IsPrimary,
+			Subnet: vnicTypes.OciSubnet{
+				ID: *v.SubnetId,
+			},
+			VCN: vnicTypes.OciVCN{
+				ID: instance.CompartmentId,
+			},
+			Addresses: []string{},
+		}
+
+		if !vnic.IsPrimary {
+			nonPrimaryVNICs++
+		}
+
+		// Add primary IP if available
+		if v.PrivateIp != nil {
+			available[*v.PrivateIp] = types.AllocationIP{Resource: *v.Id}
+			vnic.Addresses = append(vnic.Addresses, *v.PrivateIp)
+		}
+
+		// Add secondary IPs
+		if v.Id != nil {
+			privateIPs, err := n.manager.api.ListPrivateIPs(ctx, *v.Id)
+			if err != nil {
+				return nil, interfaceStats, err
+			}
+
+			for _, privateIP := range privateIPs {
+				if privateIP.IpAddress != nil {
+					available[*privateIP.IpAddress] = types.AllocationIP{Resource: *v.Id}
+					vnic.Addresses = append(vnic.Addresses, *privateIP.IpAddress)
+				}
+			}
+		}
+
+		// Store VNIC in the map
+		n.vnics[vnic.ID] = vnic
+	}
+
+	// Update interface stats
+	interfaceStats.NodeCapacity = l.IPv4 * l.Adapters
+	interfaceStats.RemainingAvailableInterfaceCount = l.Adapters - len(n.vnics)
+
+	return available, interfaceStats, nil
 }
+
+// func (n *Node) ResyncInterfacesAndIPs(ctx context.Context, log *logrus.Entry) (types.AllocationMap, stats.InterfaceStats, error) {
+// 	available := types.AllocationMap{}
+// 	stats := stats.InterfaceStats{}
+
+// 	instance, err := n.manager.api.GetInstance(ctx, n.instanceID)
+// 	if err != nil {
+// 		return nil, stats, err
+// 	}
+
+// 	// 锁定以更新 vnics 映射
+// 	n.mutex.Lock()
+// 	defer n.mutex.Unlock()
+// 	n.vnics = map[string]vnicTypes.VNIC{} // 重置 vnics 映射
+
+// 	vnicAttachments, err := n.manager.api.GetVnicAttachments(ctx, instance.CompartmentId, &instance.Id)
+// 	if err != nil {
+// 		return nil, stats, err
+// 	}
+
+// 	for _, vnicAttachment := range vnicAttachments {
+// 		v, err := n.manager.api.GetVnic(ctx, vnicAttachment.VnicId)
+// 		if err != nil {
+// 			return nil, stats, err
+// 		}
+
+// 		// 更新 vnics 映射
+// 		n.vnics[*v.Id] = vnicTypes.VNIC{
+// 			ID:        *v.Id,
+// 			IsPrimary: *v.IsPrimary,
+// 			Subnet: vnicTypes.Subnet{
+// 				ID: *v.SubnetId,
+// 			},
+// 			VCN: vnicTypes.VCN{
+// 				ID: instance.CompartmentId, // 或从其他地方获取 VCN ID
+// 			},
+// 			Addresses: []string{},
+// 		}
+
+// 		if v.PrivateIp != nil {
+// 			available[*v.PrivateIp] = types.AllocationIP{Resource: *v.Id}
+// 			n.vnics[*v.Id].Addresses = append(n.vnics[*v.Id].Addresses, *v.PrivateIp)
+// 		}
+
+// 		privateIPs, err := n.manager.api.ListPrivateIPs(ctx, v.Id)
+// 		if err != nil {
+// 			return nil, stats, err
+// 		}
+
+// 		for _, privateIP := range privateIPs {
+// 			available[*privateIP.IpAddress] = types.AllocationIP{Resource: *v.Id}
+// 			n.vnics[*v.Id].Addresses = append(n.vnics[*v.Id].Addresses, *privateIP.IpAddress)
+// 		}
+// 	}
+
+// 	stats.AvailableIPs = len(available)
+// 	return available, stats, nil
+// }
 
 // PrepareIPAllocation returns the number of VNIC IPs and interfaces that can be
 // allocated/created.
