@@ -16,9 +16,9 @@ data:
             "vcn-id": {{ .Values.oci.VCNID | quote }}
           },
           "ipam": {
-            "min-allocate": 15,
-            "pre-allocate": 10,
-            "max-above-watermark": 5
+            "min-allocate": 3,
+            "pre-allocate": 2,
+            "max-above-watermark": 2
           }
         }
       ]
