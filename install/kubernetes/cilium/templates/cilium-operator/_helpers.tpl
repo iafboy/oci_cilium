@@ -1,14 +1,16 @@
-{{- define "cilium.operator.cloud" -}}
-{{- $cloud := "generic" -}}
-{{- if .Values.eni.enabled -}}
-  {{- $cloud = "aws" -}}
-{{- else if .Values.azure.enabled -}}
-  {{- $cloud = "azure" -}}
-{{- else if .Values.alibabacloud.enabled -}}
-  {{- $cloud = "alibabacloud" -}}
-{{- end -}}
-{{- $cloud -}}
-{{- end -}}
+    {{- define "cilium.operator.cloud" -}}
+    {{- $cloud := "generic" -}}
+    {{- if .Values.eni.enabled -}}
+      {{- $cloud = "aws" -}}
+    {{- else if .Values.azure.enabled -}}
+      {{- $cloud = "azure" -}}
+    {{- else if .Values.alibabacloud.enabled -}}
+      {{- $cloud = "alibabacloud" -}}
+    {{- else if .Values.oci.enabled -}}
+      {{- $cloud = "oci" -}}
+    {{- end -}}
+    {{- $cloud -}}
+    {{- end -}}
 
 {{- define "cilium.operator.imageDigestName" -}}
 {{- $imageDigest := (.Values.operator.image.useDigest | default false) | ternary (printf "@%s" .Values.operator.image.genericDigest) "" -}}
