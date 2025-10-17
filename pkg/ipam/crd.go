@@ -749,7 +749,9 @@ func (a *crdAllocator) buildAllocationResult(ip net.IP, ipInfo *ipamTypes.Alloca
 		return nil, fmt.Errorf("unable to find ENI %s", ipInfo.Resource)
 
 	case ipamOption.IPAMOCI:
-		for _, vnic := range a.store.ownNode.Status.OCI.VNICs {
+		vnics := a.store.ownNode.Status.OCI.VNICs
+		for i := 0; i < len(vnics); i++ {
+			vnic := vnics[i]
 			if vnic.ID == ipInfo.Resource {
 				result.PrimaryMAC = vnic.MAC
 				result.CIDRs = vnic.VCN.CidrBlocks
@@ -762,8 +764,9 @@ func (a *crdAllocator) buildAllocationResult(ip net.IP, ipInfo *ipamTypes.Alloca
 					result.GatewayIP = deriveGatewayIP(vnic.Subnet.CIDR, 1)
 				}
 
-				// TODO: implement this, take reference of alibabacloud to allocate index
-				result.InterfaceNumber = "200" // strconv.Itoa(vnic.Number)
+				// Derive VNIC index from list position with offset
+				vnicIndex := i + 200
+				result.InterfaceNumber = strconv.Itoa(vnicIndex)
 
 				log.Infof("AllocatedResult: %+v", result)
 				return

@@ -121,6 +121,7 @@ func (n *Node) CreateInterface(ctx context.Context, allocation *ipam.AllocationA
 	}
 
 	ociSpec := resource.Spec.OCI
+	fmt.Errorf("VCNID: %s", ociSpec.VCNID)
 	bestSubnet := n.manager.FindSubnet(ociSpec.VCNID, ociSpec.AvailabilityDomain, toAllocate, ociSpec.SubnetTags)
 	if bestSubnet == nil {
 		return 0,
@@ -413,7 +414,37 @@ func (n *Node) getLimits() (ipamTypes.Limits, bool) {
 // getLimitsLocked is the same function as getLimits, but assumes the n.mutex
 // is read locked.
 func (n *Node) getLimitsLocked() (ipamTypes.Limits, bool) {
-	return limits.Get(n.k8sObj.Spec.OCI.Shape)
+	l, ok := limits.Get(n.k8sObj.Spec.OCI.Shape)
+	if !ok {
+		return l, ok
+	}
+
+	// 打印形状级上限
+	log.WithFields(logrus.Fields{
+		"shape":             n.k8sObj.Spec.OCI.Shape,
+		"adaptersFromShape": l.Adapters,
+		"ipv4PerAdapter":    l.IPv4,
+		"instanceID":        n.node.InstanceID(),
+	}).Info("getLimitsLocked: shape-level limits")
+
+	// 用实例级 shape-config 的上限覆盖静态形状上限（Flex 形状尤其关键）
+	if n.manager != nil && n.manager.api != nil {
+		if max, err := n.manager.api.GetInstanceMaxVnicAttachments(context.TODO(), n.node.InstanceID()); err == nil && max > 0 {
+			if max != l.Adapters {
+				log.WithFields(logrus.Fields{
+					"shape":               n.k8sObj.Spec.OCI.Shape,
+					"adaptersFromShape":   l.Adapters,
+					"adaptersFromInstance": max,
+					"instanceID":          n.node.InstanceID(),
+				}).Info("getLimitsLocked: overriding adapters with instance-level maxVnicAttachments")
+			}
+			l.Adapters = max
+		} else if err != nil {
+			log.WithError(err).Warn("getLimitsLocked: failed to query instance max VNIC attachments")
+		}
+	}
+
+	return l, true
 }
 
 func (n *Node) getSecurityGroupIDs(ctx context.Context, eniSpec vnicTypes.OciSpec) ([]string, error) {

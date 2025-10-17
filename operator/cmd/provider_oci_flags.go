@@ -16,5 +16,8 @@ func init() {
 	flags.String(operatorOption.OCIVCNID, "", "Specific VCN ID for OCI ENI. If not set use same VCN as operator")
 	option.BindEnv(Vp, operatorOption.OCIVCNID)
 
+	flags.Bool(operatorOption.OCIUseInstancePrincipal, true, "Use instance principal authentication for OCI (default true, set to false to use config file)")
+	option.BindEnv(Vp, operatorOption.OCIUseInstancePrincipal)
+
 	Vp.BindPFlags(flags)
 }

@@ -188,6 +188,27 @@ func (c *OCIClient) ListSubnets(ctx context.Context) (ipamTypes.SubnetMap, error
 	return subnets, nil
 }
 
+// GetInstanceMaxVnicAttachments 返回实例级 shape-config 的 max VNIC attachments
+func (c *OCIClient) GetInstanceMaxVnicAttachments(ctx context.Context, instanceID string) (int, error) {
+    req := core.GetInstanceRequest{
+        InstanceId: &instanceID,
+    }
+    resp, err := c.ComputeClient.GetInstance(ctx, req)
+    if err != nil {
+        return 0, err
+    }
+    if resp.Instance.ShapeConfig == nil || resp.Instance.ShapeConfig.MaxVnicAttachments == nil {
+        // 没有取到，交由调用方使用原 limits 值
+        return 0, nil
+    }
+	max := int(*resp.Instance.ShapeConfig.MaxVnicAttachments)
+	log.WithFields(logrus.Fields{
+		"instanceID":          instanceID,
+		"adaptersFromInstance": max,
+	}).Info("GetInstanceMaxVnicAttachments: resolved")
+	return max, nil
+}
+
 // NOTE: use search instead of ListInstances() may speedup:
 // query instance resources where lifeCycleState = 'RUNNING' && compartmentId = '<id>'
 func (c *OCIClient) ListInstances(ctx context.Context, vcns ipamTypes.VirtualNetworkMap, subnets ipamTypes.SubnetMap) (*ipamTypes.InstanceMap, error) {
@@ -234,6 +255,10 @@ func (c *OCIClient) ListInstances(ctx context.Context, vcns ipamTypes.VirtualNet
 		}
 
 		for _, va := range resp.Items {
+			// 仅统计 ATTACHED 的 VNIC，避免 DETACHING/DETACHED 干扰
+            		if va.LifecycleState != core.VnicAttachmentLifecycleStateAttached {
+                		continue
+            		}
 			if va.VnicId == nil {
 				// VNICs still in attaching process, just skip it
 				log.WithFields(logrus.Fields{

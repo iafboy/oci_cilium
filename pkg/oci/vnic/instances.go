@@ -39,6 +39,8 @@ type OCIAPI interface {
 	WaitVNICAttached(ctx context.Context, vnicAttachmentID string) (*vnicTypes.VNIC, error)
 	AssignPrivateIPAddresses(ctx context.Context, eniID string, toAllocate int) ([]string, error)
 	UnassignPrivateIPAddresses(ctx context.Context, eniID string, addresses []string) error
+	// 新增：获取实例级的 max VNIC attachments，用于覆盖形状目录的静态上限
+        GetInstanceMaxVnicAttachments(ctx context.Context, instanceID string) (int, error)
 }
 
 // InstancesManager maintains the list of instances. It must be kept up to date
@@ -183,7 +185,8 @@ func (m *InstancesManager) FindSubnet(vpc, ad string, toAllocate int, subnetTags
 			scopedLog.Info("FindSubnet: skip this subnet due to VCN mismatch")
 			continue
 		}
-                /* comment code block because regional VCN has no AD info. 
+
+		/*
 		if subnet.AvailabilityZone == "" {
 			scopedLog.Debug("FindSubnet: skip availability domain filter as this is an OCI regional subnet")
 		} else {

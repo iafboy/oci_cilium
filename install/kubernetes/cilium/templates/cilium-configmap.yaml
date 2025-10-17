@@ -550,6 +550,9 @@ data:
   enable-node-port: "true"
   enable-socket-lb: "true"
   enable-local-node-route: "false"
+{{- if hasKey .Values "OCIUseInstancePrincipal" }}
+  oci-use-instance-principal: {{ .Values.OCIUseInstancePrincipal | quote }}
+{{- end }}
 
 {{- if hasKey .Values "bandwidthManager" }}
 {{- if .Values.bandwidthManager.enabled }}

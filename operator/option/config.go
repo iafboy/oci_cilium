@@ -255,6 +255,9 @@ const (
 	// the number of API calls to OCI ECS service.
 	OCIReleaseExcessIPs = "oci-cloud-release-excess-ips"
 
+	// OCIUseInstancePrincipal enables instance principal authentication for OCI (default true)
+	OCIUseInstancePrincipal = "oci-use-instance-principal"
+
 	// CiliumEndpointSlice options
 
 	// CESMaxCEPsInCES is the maximum number of cilium endpoints allowed in single
@@ -542,6 +545,7 @@ type OperatorConfig struct {
 
 	// OCIVCNID allow user to specific vcn
 	OCIVCNID string
+	OCIUseInstancePrincipal bool
 
 	// CiliumEndpointSlice options
 
@@ -710,6 +714,7 @@ func (c *OperatorConfig) Populate(vp *viper.Viper) {
 	// OCI options
 
 	c.OCIVCNID = vp.GetString(OCIVCNID)
+	c.OCIUseInstancePrincipal = vp.GetBool(OCIUseInstancePrincipal)
 
 	// CiliumEndpointSlice options
 	c.CESMaxCEPsInCES = vp.GetInt(CESMaxCEPsInCES)

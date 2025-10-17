@@ -30,6 +30,7 @@ import (
 	"github.com/cilium/cilium/pkg/oci/vnic/limits"
 
 	"github.com/oracle/oci-go-sdk/v65/common"
+	auth "github.com/oracle/oci-go-sdk/v65/common/auth"
 	"github.com/oracle/oci-go-sdk/v65/core"
 	"github.com/oracle/oci-go-sdk/v65/resourcesearch"
 )
@@ -45,7 +46,22 @@ type AllocatorOCI struct {
 func (a *AllocatorOCI) Init(ctx context.Context) error {
 	log.Info("Initializing OCI client ...")
 
-	config := common.DefaultConfigProvider()
+	var config common.ConfigurationProvider
+	var err error
+
+	if operatorOption.Config.OCIUseInstancePrincipal {
+		// Use instance principal authentication
+		config, err = auth.InstancePrincipalConfigurationProvider()
+		if err != nil {
+			return fmt.Errorf("failed to create instance principal config provider: %w", err)
+		}
+		log.Info("Using instance principal authentication for OCI")
+	} else {
+		// Use config file authentication
+		config = common.DefaultConfigProvider()
+		log.Info("Using config file authentication for OCI")
+	}
+
 	ociClient := pkgClient.OCIClient{}
 
 	// Init virtual network client
