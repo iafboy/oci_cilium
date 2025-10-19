@@ -635,6 +635,10 @@ data:
 {{- end }}
 
   auto-direct-node-routes: {{ .Values.autoDirectNodeRoutes | quote }}
+  
+{{- if hasKey .Values "OCIUseInstancePrincipal" }}
+  oci-use-instance-principal: {{ .Values.OCIUseInstancePrincipal | quote }}
+{{- end }}
 
 {{- if hasKey .Values "bandwidthManager" }}
 {{- if .Values.bandwidthManager.enabled }}

@@ -69,18 +69,13 @@ func Get(instanceType string) (limit ipamTypes.Limits, ok bool) {
 // Shape list:
 // https://docs.oracle.com/en-us/iaas/Content/Compute/References/computeshapes.htm#Compute_Shapes
 func UpdateFromAPI(ctx context.Context, client *client.OCIClient) error {
-	var err error
 	vcnID := operatorOption.Config.OCIVCNID
 	if vcnID == "" {
-		return fmt.Errorf("OCI VCN ID could not be empty")
-		// TODO: https://docs.oracle.com/en-us/iaas/Content/Compute/Tasks/gettingmetadata.htm
-		// vcnID, err = metadata.GetVPCID(context.TODO())
-		// if err != nil {
-		// 	return err
-		// }
+		log.Warning("OCI VCN ID not configured via --oci-vcn-id flag, this is required for OCI IPAM to work properly")
+		return fmt.Errorf("OCI VCN ID is required but not configured. Please set --oci-vcn-id operator flag")
 	}
 
-	fmt.Printf("Searching VCN info from OCI, vcnID %s", vcnID)
+	log.Infof("Searching VCN info from OCI, vcnID: %s", vcnID)
 
 	// https://docs.oracle.com/en-us/iaas/api/#/en/search/20180409/ResourceSummary/SearchResources
 	req := resourcesearch.SearchResourcesRequest{
@@ -90,7 +85,7 @@ func UpdateFromAPI(ctx context.Context, client *client.OCIClient) error {
 	}
 	r, err := client.ResourceSearchClient.SearchResources(context.Background(), req)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("failed to search VCN resources: %w", err)
 	}
 
 	if r.Items == nil || len(r.Items) == 0 {

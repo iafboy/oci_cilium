@@ -233,6 +233,9 @@ const (
 	// the number of API calls to OCI ECS service.
 	OCIReleaseExcessIPs = "oci-cloud-release-excess-ips"
 
+	// OCIUseInstancePrincipal enables instance principal authentication for OCI (default true)
+	OCIUseInstancePrincipal = "oci-use-instance-principal"
+
 	// LoadBalancerL7 enables loadbalancer capabilities for services via envoy proxy
 	LoadBalancerL7 = "loadbalancer-l7"
 
@@ -439,7 +442,8 @@ type OperatorConfig struct {
 
 	// OCI options
 	// OCIVCNID allow user to specific vcn
-	OCIVCNID string
+	OCIVCNID                string
+	OCIUseInstancePrincipal bool
 
 	// LoadBalancerL7 enables loadbalancer capabilities for services.
 	LoadBalancerL7 string
@@ -557,6 +561,7 @@ func (c *OperatorConfig) Populate(vp *viper.Viper) {
 
 	// OCI options
 	c.OCIVCNID = vp.GetString(OCIVCNID)
+	c.OCIUseInstancePrincipal = vp.GetBool(OCIUseInstancePrincipal)
 	//c.OCIReleaseExcessIPs = vp.GetBool(OCIReleaseExcessIPs) // delete by dw ?
 
 	// Option maps and slices

@@ -43,6 +43,8 @@ type OCIAPI interface {
 	GetVnicAttachments(ctx context.Context, compartmentID string, instanceID *string) ([]types.VnicAttachment, error)
 	GetVnic(ctx context.Context, vnicID string) (*types.Vnic, error)
 	ListPrivateIPs(ctx context.Context, vnicID string) ([]types.PrivateIP, error)
+	// 新增：获取实例级的 max VNIC attachments，用于覆盖形状目录的静态上限
+	GetInstanceMaxVnicAttachments(ctx context.Context, instanceID string) (int, error)
 }
 
 // func (o OCIAPI) GetInstance(ctx context.Context, d string) (any, any) {
@@ -192,14 +194,14 @@ func (m *InstancesManager) FindSubnet(vpc, ad string, toAllocate int, subnetTags
 			continue
 		}
 
-		if subnet.AvailabilityZone == "" {
-			scopedLog.Debug("FindSubnet: skip availability domain filter as this is an OCI regional subnet")
-		} else {
-			if subnet.AvailabilityZone != ad {
-				scopedLog.Info("FindSubnet: skip this subnet due to availability domain mismatch")
-				continue
-			}
-		}
+		// if subnet.AvailabilityZone == "" {
+		// 	scopedLog.Debug("FindSubnet: skip availability domain filter as this is an OCI regional subnet")
+		// } else {
+		// 	if subnet.AvailabilityZone != ad {
+		// 		scopedLog.Info("FindSubnet: skip this subnet due to availability domain mismatch")
+		// 		continue
+		// 	}
+		// }
 
 		if subnet.AvailableAddresses < toAllocate {
 			scopedLog.Info("FindSubnet: skip this subnet due toAllocate too big")
@@ -293,14 +295,21 @@ func (m *InstancesManager) InstanceSync(ctx context.Context, instanceID string) 
 			continue
 		}
 
+		// Get VCN ID from subnet
+		vcnID := ""
+		subnetID := *v.SubnetId
+		if subnet, ok := subnets[subnetID]; ok {
+			vcnID = subnet.VirtualNetworkID
+		}
+
 		vnic := &vnicTypes.VNIC{
 			ID:        va.VnicId,
 			IsPrimary: *v.IsPrimary,
 			Subnet: vnicTypes.OciSubnet{
-				ID: *v.SubnetId,
+				ID: subnetID,
 			},
 			VCN: vnicTypes.OciVCN{
-				ID: instance.CompartmentId,
+				ID: vcnID,
 			},
 			Addresses: []string{},
 		}
@@ -328,14 +337,20 @@ func (m *InstancesManager) InstanceSync(ctx context.Context, instanceID string) 
 
 	m.mutex.Lock()
 	// Update only this instance in the map
+	// Delete the old instance data first
 	m.instances.Delete(instanceID)
-	m.instances.ForeachInterface(instanceID, func(instanceID, interfaceID string, rev ipamTypes.InterfaceRevision) error {
+	// Now update with the newly synced instance data
+	instances.ForeachInterface(instanceID, func(instanceID, interfaceID string, rev ipamTypes.InterfaceRevision) error {
 		m.instances.Update(instanceID, rev)
 		return nil
 	})
 	m.vcns = vcns
 	m.subnets = subnets
 	m.mutex.Unlock()
+
+	log.WithFields(logrus.Fields{
+		"instanceID": instanceID,
+	}).Info("InstanceSync completed successfully")
 
 	return resyncStart
 }

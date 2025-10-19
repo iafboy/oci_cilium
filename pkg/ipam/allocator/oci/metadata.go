@@ -12,7 +12,7 @@
 //See the License for the specific language governing permissions and
 //limitations under the License.
 
-package metadata
+package oci
 
 import (
 	"fmt"
@@ -49,7 +49,7 @@ func getMetadata(client *http.Client, path string) (string, error) {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("HTTP request failed: %v", err)
+		return "", fmt.Errorf("HTTP request failed: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -87,26 +87,26 @@ func GetInstanceMetadata() (instanceID, instanceShape, availabilityDomain, vcnID
 		return
 	}
 
-	// Get compartment ID from instance metadata
-	compartmentID, err := getMetadata(client, "instance/compartmentId")
-	if err != nil {
-		return
-	}
-
-	// Get the primary VNIC's subnet ID for reference
-	_, subnetErr := getMetadata(client, "vnics/0/subnetId")
+	// Try to get VCN ID from the primary VNIC's subnet
+	// OCI metadata service doesn't directly expose VCN ID, but we can get it from the subnet
+	subnetID, subnetErr := getMetadata(client, "vnics/0/subnetId")
 	if subnetErr != nil {
-		// If we can't get subnet ID from metadata, return compartmentID
-		// The actual VCN ID will need to be specified via operator flag
-		vcnID = compartmentID
+		// If we can't get subnet ID from metadata, VCN ID must be provided via --oci-vcn-id flag
+		// Return empty vcnID and let the operator configuration handle it
+		vcnID = ""
 		return
 	}
 
-	// Note: OCI metadata service doesn't directly expose VCN ID.
-	// The VCN ID must be specified via the --oci-vcn-id operator flag.
-	// We return compartmentID here as a placeholder, but the operator
-	// configuration should override this with the actual VCN ID.
-	vcnID = compartmentID
+	// Note: We cannot resolve VCN ID from subnet without full OCI authentication
+	// The actual VCN ID MUST be specified via the --oci-vcn-id operator flag
+	// We do NOT use compartmentID as it's a different resource type
+	vcnID = ""
+
+	// Log the discovered subnet for debugging
+	if subnetID != "" {
+		// Subnet ID is available: the operator will use --oci-vcn-id to specify the VCN
+		// This is the recommended approach as it's explicit and validated
+	}
 
 	return
 }

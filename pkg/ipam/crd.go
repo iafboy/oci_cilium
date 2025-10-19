@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"sort"
 	"strconv"
 	"sync"
 
@@ -767,30 +768,71 @@ func (a *crdAllocator) buildAllocationResult(ip net.IP, ipInfo *ipamTypes.Alloca
 	// In OCI mode, the Resource points to the VNIC so we can derive the
 	// master interface and all CIDRs of the VPC
 	//add by dw
+	//modify by alex
+	// case ipamOption.IPAMOCI:
+	// 	vnics := a.store.ownNode.Status.OCI.VNICs
+	// 	for i := 0; i < len(vnics); i++ {
+	// 		vnic := vnics[i]
+	// 		if vnic.ID == ipInfo.Resource {
+	// 			result.PrimaryMAC = vnic.MAC
+	// 			result.CIDRs = vnic.VCN.CidrBlocks
+	// 			// Add manually configured Native Routing CIDR
+	// 			// if a.conf.IPv4NativeRoutingCIDR() != nil {
+	// 			// 	result.CIDRs = append(result.CIDRs, a.conf.IPv4NativeRoutingCIDR().String())
+	// 			// }
+	// 			if vnic.Subnet.CIDR != "" {
+	// 				// NOTE: The gateway for a subnet and VPC is always x.x.x.1, TODO: Add oracle doc link
+	// 				result.GatewayIP = deriveGatewayIP(vnic.Subnet.CIDR, 1)
+	// 			}
+
+	// 			// TODO: implement this, take reference of alibabacloud to allocate index
+	// 			//result.InterfaceNumber = "200" // strconv.Itoa(vnic.Number)
+	// 			// Derive VNIC index from list position with offset
+	// 			vnicIndex := i + 200
+	// 			result.InterfaceNumber = strconv.Itoa(vnicIndex)
+
+	// 			log.Infof("AllocatedResult: %+v", result)
+	// 			return
+	// 		}
+	// 	}
+	// 	return nil, fmt.Errorf("unable to find ENI %s", ipInfo.Resource)
+	// }
 	case ipamOption.IPAMOCI:
-		for _, vnic := range a.store.ownNode.Status.OCI.VNICs {
+		vnics := a.store.ownNode.Status.OCI.VNICs
+
+		// Sort VNIC IDs to ensure deterministic interface numbering
+		vnicIDs := make([]string, 0, len(vnics))
+		for vnicID := range vnics {
+			vnicIDs = append(vnicIDs, vnicID)
+		}
+		sort.Strings(vnicIDs)
+
+		// Find the target VNIC by iterating in sorted order
+		for i, vnicID := range vnicIDs {
+			vnic := vnics[vnicID]
 			if vnic.ID == ipInfo.Resource {
 				result.PrimaryMAC = vnic.MAC
 				result.CIDRs = vnic.VCN.CidrBlocks
 				// Add manually configured Native Routing CIDR
 				// if a.conf.IPv4NativeRoutingCIDR() != nil {
-				// 	result.CIDRs = append(result.CIDRs, a.conf.IPv4NativeRoutingCIDR().String())
+				//     result.CIDRs = append(result.CIDRs, a.conf.IPv4NativeRoutingCIDR().String())
 				// }
 				if vnic.Subnet.CIDR != "" {
-					// NOTE: The gateway for a subnet and VPC is always x.x.x.1, TODO: Add oracle doc link
+					// NOTE: The gateway for a subnet and VPC is always x.x.x.1
+					// Reference: https://docs.oracle.com/en-us/iaas/Content/Network/Tasks/managingVCNs.htm
 					result.GatewayIP = deriveGatewayIP(vnic.Subnet.CIDR, 1)
 				}
 
-				// TODO: implement this, take reference of alibabacloud to allocate index
-				result.InterfaceNumber = "200" // strconv.Itoa(vnic.Number)
+				// Derive deterministic VNIC index from sorted position with offset
+				vnicIndex := i + 200
+				result.InterfaceNumber = strconv.Itoa(vnicIndex)
 
 				log.Infof("AllocatedResult: %+v", result)
 				return
 			}
 		}
-		return nil, fmt.Errorf("unable to find ENI %s", ipInfo.Resource)
+		return nil, fmt.Errorf("unable to find VNIC %s", ipInfo.Resource)
 	}
-
 	return
 }
 

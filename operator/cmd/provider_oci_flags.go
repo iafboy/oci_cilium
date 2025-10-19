@@ -25,5 +25,8 @@ func (h *ociFlagsHooks) RegisterProviderFlag(cmd *cobra.Command, vp *viper.Viper
 	flags.String(operatorOption.OCIVCNID, "", "Specific VCN ID for OCI ENI. If not set use same VCN as operator")
 	option.BindEnv(vp, operatorOption.OCIVCNID)
 
+	flags.Bool(operatorOption.OCIUseInstancePrincipal, true, "Use instance principal authentication for OCI (default true, set to false to use config file)")
+	option.BindEnv(vp, operatorOption.OCIUseInstancePrincipal)
+
 	vp.BindPFlags(flags)
 }
