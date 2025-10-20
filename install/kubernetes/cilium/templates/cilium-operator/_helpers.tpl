@@ -6,6 +6,8 @@
   {{- $cloud = "azure" -}}
 {{- else if .Values.alibabacloud.enabled -}}
   {{- $cloud = "alibabacloud" -}}
+{{- else if .Values.oci.enabled -}}
+  {{- $cloud = "oci" -}}
 {{- end -}}
 {{- $cloud -}}
 {{- end -}}

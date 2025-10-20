@@ -358,6 +358,12 @@ azure:
 alibabacloud:
   # -- Enable AlibabaCloud ENI integration
   enabled: false
+oci:
+  # -- Enable OCI NPN integration, replace VCNID and subnetTagsFilter with your own ENV
+  enabled: false
+  VCNID: ocid1.vcn.oc1.eu-frankfurt-1.amaaaaaay5l3z3ya3i6hi5n42zl3vfyj7tilsjqwules5mz7s4zgad2as4pq
+  subnetTagsFilter:
+    podSubnet: "xyz"
 
 # -- Enable bandwidth manager to optimize TCP and UDP workloads and allow
 # for rate-limiting traffic from individual Pods with EDT (Earliest Departure
