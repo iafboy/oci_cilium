@@ -248,15 +248,42 @@ func (n *Node) ResyncInterfacesAndIPs(ctx context.Context, log *logrus.Entry) (t
 	available := types.AllocationMap{}
 	interfaceStats := stats.InterfaceStats{}
 
+	// Try to use VNIC data from CiliumNode status first (populated by OCI sync)
+	// This avoids repeated OCI API calls and permission issues
+	n.mutex.Lock()
+	defer n.mutex.Unlock()
+
+	if n.k8sObj != nil && n.k8sObj.Status.OCI.VNICs != nil && len(n.k8sObj.Status.OCI.VNICs) > 0 {
+		// Use cached VNIC data from status
+		log.Debug("Using VNIC data from CiliumNode status")
+		n.vnics = map[string]vnicTypes.VNIC{}
+		for vnicID, vnic := range n.k8sObj.Status.OCI.VNICs {
+			n.vnics[vnicID] = vnic
+
+			// Build available map from VNIC addresses
+			for _, addr := range vnic.Addresses {
+				// Only add to available pool if it's NOT the primary VNIC's primary IP
+				if !vnic.IsPrimary || addr != vnic.PrimaryIP {
+					available[addr] = types.AllocationIP{Resource: vnicID}
+				}
+			}
+		}
+
+		// Update interface stats
+		interfaceStats.NodeCapacity = l.IPv4 * l.Adapters
+		interfaceStats.RemainingAvailableInterfaceCount = l.Adapters - len(n.vnics)
+
+		return available, interfaceStats, nil
+	}
+
+	// Fallback to OCI API calls if status data not available
+	log.Debug("Falling back to OCI API calls for VNIC data")
+	n.vnics = map[string]vnicTypes.VNIC{} // Reset vnics map
+
 	instance, err := n.manager.api.GetInstance(ctx, n.instanceID)
 	if err != nil {
 		return nil, interfaceStats, err
 	}
-
-	// Lock to update vnics map
-	n.mutex.Lock()
-	defer n.mutex.Unlock()
-	n.vnics = map[string]vnicTypes.VNIC{} // Reset vnics map
 
 	vnicAttachments, err := n.manager.api.GetVnicAttachments(ctx, instance.CompartmentId, &instance.Id)
 	if err != nil {
@@ -296,8 +323,14 @@ func (n *Node) ResyncInterfacesAndIPs(ctx context.Context, log *logrus.Entry) (t
 		}
 
 		// Add primary IP if available
+		// Note: We add the primary IP to the vnic.Addresses list for tracking,
+		// but we should NOT make it available for Pod allocation (it's used by the host).
+		// The IPAM allocator will filter this out based on the node's instance IP.
 		if v.PrivateIp != nil {
-			available[*v.PrivateIp] = types.AllocationIP{Resource: *v.Id}
+			// Only add to available pool if it's a secondary IP, not the primary VNIC's primary IP
+			if !(*v.IsPrimary) {
+				available[*v.PrivateIp] = types.AllocationIP{Resource: *v.Id}
+			}
 			vnic.Addresses = append(vnic.Addresses, *v.PrivateIp)
 		}
 
@@ -404,11 +437,13 @@ func (n *Node) PrepareIPAllocation(scopedLog *logrus.Entry) (*ipam.AllocationAct
 			// "vnicname":  utils.GetVnicDisplayName(&e),
 			"ipv4Limit": l.IPv4,
 			"allocated": len(e.Addresses),
+			"isPrimary": e.IsPrimary,
 		}).Info("PrepareIPAllocation: considering VNIC for allocation")
 
-		if e.IsPrimary {
-			continue
-		}
+		// Note: Unlike AWS ENI which skips primary ENI, OCI allows allocating
+		// secondary private IPs to the primary VNIC. This is the recommended
+		// approach for OCI to avoid unnecessary VNIC attachments.
+		// We do NOT skip primary VNIC here.
 
 		availableOnVNIC := math.IntMax(l.IPv4-len(e.Addresses), 0)
 		if availableOnVNIC <= 0 {
@@ -474,12 +509,12 @@ func (n *Node) PrepareIPRelease(excessIPs int, scopedLog *logrus.Entry) *ipam.Re
 		scopedLog.WithFields(logrus.Fields{
 			fieldVNICID:    e.ID,
 			"numAddresses": len(e.Addresses),
+			"isPrimary":    e.IsPrimary,
 		}).Info("Considering VNIC for IP release")
 
-		if e.IsPrimary {
-			log.Info("Skip primary VNIC for OCI PrepareIPRelease")
-			continue
-		}
+		// Note: For OCI, we can release secondary private IPs from the primary VNIC.
+		// This is different from AWS where primary ENI is typically not managed.
+		// We do NOT skip primary VNIC here.
 
 		// Count free IP addresses on this VNIC
 		ipsOnVNIC := n.k8sObj.Status.OCI.VNICs[e.ID].Addresses

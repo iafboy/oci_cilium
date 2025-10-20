@@ -89,10 +89,12 @@ func (c *OCIClient) GetVnicAttachments(ctx context.Context, compartmentID string
 	result := make([]types.VnicAttachment, 0, len(resp.Items))
 	for _, item := range resp.Items {
 		attachment := types.VnicAttachment{
-			Id:          *item.Id,
-			VnicId:      *item.VnicId,
-			InstanceId:  *item.InstanceId,
-			DisplayName: *item.DisplayName,
+			Id:         *item.Id,
+			VnicId:     *item.VnicId,
+			InstanceId: *item.InstanceId,
+		}
+		if item.DisplayName != nil {
+			attachment.DisplayName = *item.DisplayName
 		}
 		result = append(result, attachment)
 	}
@@ -403,11 +405,10 @@ func (c *OCIClient) ListInstances(ctx context.Context, vcns ipamTypes.VirtualNet
 					continue
 				}
 
+				// Note: We need to include ALL IPs (primary + secondary) in the Addresses list
+				// for IPAM to work correctly. The primary IP will be filtered out later based
+				// on whether it's the node's primary VNIC.
 				for _, ip := range r2.Items {
-					if *ip.IsPrimary {
-						continue
-					}
-
 					privateIPs = append(privateIPs, *ip.IpAddress)
 				}
 			}
