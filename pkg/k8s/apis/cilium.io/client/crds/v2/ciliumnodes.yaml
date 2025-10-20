@@ -117,6 +117,37 @@ spec:
                       will use to allocate all the IPs on
                     type: string
                 type: object
+              oci:
+                description: OCI is the Oracle Cloud Infrastructure IPAM specific configuration.
+                properties:
+                  shape:
+                    description: Shape is the ECS instance type, e.g. "ecs.g6.2xlarge"
+                    type: string
+                  security-groups:
+                    description: SecurityGroups is the list of security groups to
+                      attach to any ENI that is created and attached to the instance.
+                    items:
+                      type: string
+                    type: array
+                  security-group-tags:
+                    additionalProperties:
+                      type: string
+                    description: SecurityGroupTags is the list of tags to use when
+                      evaluating which security groups to use for the ENI.
+                    type: object
+                  subnet-tags:
+                    additionalProperties:
+                      type: string
+                    description: SubnetTags is the list of tags to use when evaluating
+                      which subnet to use for the VNIC.
+                    type: object
+                  vcn-id:
+                    description: VCNID is the VCN ID to use when allocating VNICs.
+                    type: string
+                  availability-domain:
+                    description: AvailabilityDomain is the availability zone to use when allocating VNICs.
+                    type: string
+                type: object
               encryption:
                 description: Encryption is the encryption configuration of the node.
                 properties:
@@ -283,6 +314,25 @@ spec:
                       the minimum base socket of addresses that must be available.
                       After reaching this watermark, the PreAllocate and MaxAboveWatermark
                       logic takes over to continue allocating IPs.
+                    minimum: 0
+                    type: integer
+                  pod-cidr-allocation-threshold:
+                    description: PodCIDRAllocationThreshold defines the minimum number
+                      of free IPs which must be available to this node via its pod
+                      CIDR pool. If the total number of IP addresses in the pod CIDR
+                      pool is less than this value, the pod CIDRs currently in-use
+                      by this node will be marked as depleted and cilium-operator
+                      will allocate a new pod CIDR to this node. This value effectively
+                      defines the buffer of IP addresses available immediately without
+                      requiring cilium-operator to get involved.
+                    minimum: 0
+                    type: integer
+                  pod-cidr-release-threshold:
+                    description: PodCIDRReleaseThreshold defines the maximum number
+                      of free IPs which may be available to this node via its pod
+                      CIDR pool. While the total number of free IP addresses in the
+                      pod CIDR pool is larger than this value, cilium-agent will attempt
+                      to release currently unused pod CIDRs.
                     minimum: 0
                     type: integer
                   podCIDRs:
@@ -543,6 +593,65 @@ spec:
                           type: string
                       type: object
                     type: array
+                type: object
+              oci:
+                description: OCI is the Oracle Cloud Infrastructure specific status of the node.
+                properties:
+                  vnics:
+                    additionalProperties:
+                      description: VNICs represents an OCI Elastic Network Interface
+                      properties:
+                        id:
+                          description: ID is the VNIC ID
+                          type: string
+                        primary-ip:
+                          description: PrimaryIP is the primary IP on VNIC
+                          type: string
+                        mac:
+                          description: MAC is the mac address of the VNIC
+                          type: string
+                        availability-domain:
+                          description: AvailabilityDomain is the availability domain of the VNIC
+                          type: string
+                        description:
+                          description: Description is the description field of the VNIC
+                          type: string
+                        vcn:
+                          description: VCN is the vcn to which the ENI belongs
+                          properties:
+                            id:
+                              description: ID is the vcn to which the VNIC belongs
+                              type: string
+                            cidr-blocks:
+                              description: CidrBlocks is the VCN IPv4 CIDRs
+                              items:
+                                type: string
+                              type: array
+                          type: object
+                        subnet:
+                          description: Subnet is the subnet the ENI is associated with
+                          properties:
+                            id:
+                              description: ID is the ID of the subnet
+                              type: string
+                            cidr:
+                              description: CIDR is the CIDR range associated with
+                                the subnet
+                              type: string
+                          type: object
+                        addresses:
+                          description: Addresses is the list of all secondary IPs associated with the VNIC
+                          items:
+                            type: string
+                          type: array
+                        security-groupids:
+                          description: SecurityGroupIDs is the security group ids used by this VNIC
+                          items:
+                            type: string
+                          type: array
+                      type: object
+                    description: VNICs is the list of VNICs on the node
+                    type: object
                 type: object
               eni:
                 description: ENI is the AWS ENI specific status of the node.
