@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 ARG BASE_IMAGE=scratch
-ARG GOLANG_IMAGE=docker.io/library/golang:1.21.8@sha256:c82d4ad02c062cf2b393bf0374df26638c6fed3dfe52cdbd3635d4a7befab86e
+ARG GOLANG_IMAGE=docker.io/library/golang:1.24
 ARG ALPINE_IMAGE=docker.io/library/alpine:3.19.1@sha256:c5b1261d6d3e43071626931fc004f70149baeba2c8ec672bd4f27761f8e1ad6b
 ARG CILIUM_BUILDER_IMAGE=quay.io/cilium/cilium-builder:d08110683adc2166d06303ad62942a0188fb7caf@sha256:817309c5eb9554530ec64bbfcac927c5b7bfff90e716e7463ed2bde3d2841ec3
 
@@ -22,16 +22,17 @@ ARG RACE
 #ARG OPERATOR_VARIANT
 ARG OPERATOR_VARIANT=operator-oci
 
-WORKDIR /go/src/github.com/cilium/cilium
+WORKDIR /go/src/github.com/cilium/cilium/operator
 
 RUN --mount=type=bind,readwrite,target=/go/src/github.com/cilium/cilium \
     --mount=type=cache,target=/root/.cache \
     --mount=type=cache,target=/go/pkg \
-    make GOARCH=${TARGETARCH} RACE=${RACE} NOSTRIP=${NOSTRIP} NOOPT=${NOOPT} LOCKDEBUG=${LOCKDEBUG} \
-    DESTDIR=/out/${TARGETOS}/${TARGETARCH} build-container-${OPERATOR_VARIANT} install-container-binary-${OPERATOR_VARIANT}
+    make GOARCH=${TARGETARCH} RACE=${RACE} NOSTRIP=${NOSTRIP} NOOPT=${NOOPT} LOCKDEBUG=${LOCKDEBUG} cilium-${OPERATOR_VARIANT} \
+    && mkdir -p /out/${TARGETOS}/${TARGETARCH}/usr/bin && mv cilium-${OPERATOR_VARIANT} /out/${TARGETOS}/${TARGETARCH}/usr/bin
 
 # licenses-all is a "script" that executes "go run" so its ARCH should be set
 # to the same ARCH specified in the base image of this Docker stage (BUILDARCH)
+WORKDIR /go/src/github.com/cilium/cilium
 RUN --mount=type=bind,readwrite,target=/go/src/github.com/cilium/cilium \
     --mount=type=cache,target=/root/.cache \
     --mount=type=cache,target=/go/pkg \

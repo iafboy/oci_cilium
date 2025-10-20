@@ -42,9 +42,6 @@ func newClient() (*http.Client, error) {
 func getMetadata(client *http.Client, path string) (string, error) {
 	url := metadataBaseURL + path
 	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create HTTP request: %w", err)
-	}
 	req.Header.Add("Authorization", "Bearer Oracle")
 
 	resp, err := client.Do(req)
@@ -87,26 +84,19 @@ func GetInstanceMetadata() (instanceID, instanceShape, availabilityDomain, vcnID
 		return
 	}
 
-	// Get compartment ID from instance metadata
-	compartmentID, err := getMetadata(client, "instance/compartmentId")
-	if err != nil {
-		return
-	}
+	// TODO: hard code to get the mac of the first VNIC
+	// eth0MAC, err := getMetadata(client, "vnics/0/macAddr")
+	// if err != nil {
+	// 	return
+	// }
 
-	// Get the primary VNIC's subnet ID for reference
-	_, subnetErr := getMetadata(client, "vnics/0/subnetId")
-	if subnetErr != nil {
-		// If we can't get subnet ID from metadata, return compartmentID
-		// The actual VCN ID will need to be specified via operator flag
-		vcnID = compartmentID
-		return
-	}
+	// TODO: get VCN info with VNIC info?
 
-	// Note: OCI metadata service doesn't directly expose VCN ID.
-	// The VCN ID must be specified via the --oci-vcn-id operator flag.
-	// We return compartmentID here as a placeholder, but the operator
-	// configuration should override this with the actual VCN ID.
-	vcnID = compartmentID
+	// vpcIDPath := fmt.Sprintf("network/interfaces/macs/%s/vpc-id", eth0MAC)
+	// vcnID, err = getMetadata(client, vpcIDPath)
+	// if err != nil {
+	// 	return
+	// }
 
 	return
 }
