@@ -34,6 +34,7 @@ var (
 func enableUnmanagedController(ctx context.Context, wg *sync.WaitGroup, clientset k8sClient.Clientset) {
 	// These functions will block until the resources are synced with k8s.
 	watchers.CiliumEndpointsInit(ctx, wg, clientset)
+	watchers.PodsInit(ctx, wg, clientset)
 	watchers.UnmanagedPodsInit(ctx, wg, clientset)
 
 	mgr := controller.NewManager()

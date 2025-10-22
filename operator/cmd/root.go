@@ -537,6 +537,10 @@ func (legacy *legacyOnLeader) onStart(_ cell.HookContext) error {
 			log.WithError(err).Fatalf("Unable to start %s allocator", ipamMode)
 		}
 
+		// Note: PodStore is initialized by enableUnmanagedController() if enabled,
+		// which runs before IPAM initialization. This ensures PodStore is available
+		// for OCI IPAM's pending pod detection feature.
+
 		nodeManager = nm
 	}
 
