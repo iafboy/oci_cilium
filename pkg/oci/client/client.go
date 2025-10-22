@@ -133,14 +133,14 @@ func (c *OCIClient) ListPrivateIPs(ctx context.Context, vnicID string) ([]types.
 		return nil, nil
 	}
 
+	// Include ALL IPs (primary + secondary) for consistency with ListInstances()
+	// Filtering should happen at the node.go layer based on VNIC context
 	result := make([]types.PrivateIP, 0, len(resp.Items))
 	for _, item := range resp.Items {
-		if *item.IsPrimary {
-			continue
-		}
 		privateIP := types.PrivateIP{
 			Id:        item.Id,
 			IpAddress: item.IpAddress,
+			IsPrimary: item.IsPrimary,
 		}
 		result = append(result, privateIP)
 	}
@@ -567,7 +567,7 @@ func (c *OCIClient) AssignPrivateIPAddresses(ctx context.Context, vnicID string,
 
 	ipAddr := *privateIP.IpAddress
 
-	if privateIP.IsPrimary == nil || *privateIP.IsPrimary == true {
+	if privateIP.IsPrimary != nil && *privateIP.IsPrimary {
 		return ips, fmt.Errorf("returned PrivateIp from OCI is primary IP")
 	}
 
