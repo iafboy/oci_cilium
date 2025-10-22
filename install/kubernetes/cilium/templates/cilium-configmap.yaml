@@ -449,7 +449,16 @@ data:
   #   - disabled
   #   - vxlan (default)
   #   - geneve
-{{- if .Values.gke.enabled }}
+{{- if .Values.oci.enabled }}
+  {{- if ne (.Values.routingMode | default "native") "native" }}
+    {{- fail (printf "RoutingMode must be set to native when gke.enabled=true" )}}
+  {{- end }}
+  auto-direct-node-routes: {{ .Values.autoDirectNodeRoutes | quote }}
+  routing-mode: "native"
+  enable-dns-proxy: "true"
+  enable-endpoint-routes: "true"
+  enable-local-node-route: "false"
+{{- else if .Values.gke.enabled }}
   {{- if ne (.Values.routingMode | default "native") "native" }}
     {{- fail (printf "RoutingMode must be set to native when gke.enabled=true" )}}
   {{- end }}
@@ -702,19 +711,26 @@ data:
 {{- end }}
 {{- end }}
 
-{{- if hasKey .Values "hostPort" }}
-{{- if or (eq $kubeProxyReplacement "partial") (eq $kubeProxyReplacement "false") }}
-  enable-host-port: {{ .Values.hostPort.enabled | quote }}
-{{- end }}
-{{- end }}
-{{- if hasKey .Values "externalIPs" }}
-{{- if or (eq $kubeProxyReplacement "partial") (eq $kubeProxyReplacement "false") }}
-  enable-external-ips: {{ .Values.externalIPs.enabled | quote }}
-{{- end }}
-{{- end }}
-{{- if hasKey .Values "nodePort" }}
-{{- if or (eq $kubeProxyReplacement "partial") (eq $kubeProxyReplacement "false") }}
-  enable-node-port: {{ .Values.nodePort.enabled | quote }}
+{{- if .Values.oci.enabled }}
+  enable-external-ips: "true"
+  enable-host-port: "true"
+  enable-node-port: "true"
+  enable-socket-lb: "true"
+{{- else }}
+  {{- if hasKey .Values "hostPort" }}
+  {{- if or (eq $kubeProxyReplacement "partial") (eq $kubeProxyReplacement "false") }}
+    enable-host-port: {{ .Values.hostPort.enabled | quote }}
+  {{- end }}
+  {{- end }}
+  {{- if hasKey .Values "externalIPs" }}
+  {{- if or (eq $kubeProxyReplacement "partial") (eq $kubeProxyReplacement "false") }}
+    enable-external-ips: {{ .Values.externalIPs.enabled | quote }}
+  {{- end }}
+  {{- end }}
+  {{- if hasKey .Values "nodePort" }}
+  {{- if or (eq $kubeProxyReplacement "partial") (eq $kubeProxyReplacement "false") }}
+    enable-node-port: {{ .Values.nodePort.enabled | quote }}
+  {{- end }}
 {{- end }}
 {{- if hasKey .Values.nodePort "range" }}
   node-port-range: {{ get .Values.nodePort "range" | quote }}
