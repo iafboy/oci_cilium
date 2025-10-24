@@ -476,7 +476,27 @@ func (n *Node) recalculate() {
 // allocationNeeded returns true if this node requires IPs to be allocated
 func (n *Node) allocationNeeded() (needed bool) {
 	n.mutex.RLock()
-	needed = !n.waitingForPoolMaintenance && n.resyncNeeded.IsZero() && n.stats.NeededIPs > 0
+	neededByStats := n.stats.NeededIPs > 0
+	n.mutex.RUnlock()
+
+	// Check if there are pending pods that need IPs, even if NeededIPs is 0
+	// (This can happen when IPs are available but on interfaces that are full)
+	numPendingPods, err := getPendingPodCount(n.name)
+	if err != nil {
+		if n.logLimiter.Allow() {
+			n.logger().WithError(err).Warning("Unable to check pending pods in allocationNeeded")
+		}
+		numPendingPods = 0
+	}
+
+	n.logger().WithFields(logrus.Fields{
+		"neededIPs":        n.stats.NeededIPs,
+		"numPendingPods":   numPendingPods,
+		"allocationNeeded": neededByStats || numPendingPods > 0,
+	}).Info("allocationNeeded check")
+
+	n.mutex.RLock()
+	needed = !n.waitingForPoolMaintenance && n.resyncNeeded.IsZero() && (neededByStats || numPendingPods > 0)
 	n.mutex.RUnlock()
 	return
 }
@@ -623,6 +643,12 @@ func (n *Node) determineMaintenanceAction() (*maintenanceAction, error) {
 	scopedLog := n.logger()
 	stats := n.Stats()
 
+	scopedLog.WithFields(logrus.Fields{
+		"availableIPs": stats.AvailableIPs,
+		"usedIPs":      stats.UsedIPs,
+		"neededIPs":    stats.NeededIPs,
+	}).Info("determineMaintenanceAction called")
+
 	// Validate that the node still requires addresses to be released, the
 	// request may have been resolved in the meantime.
 	if n.manager.releaseExcessIPs && stats.ExcessIPs > 0 {
@@ -630,9 +656,22 @@ func (n *Node) determineMaintenanceAction() (*maintenanceAction, error) {
 		return a, nil
 	}
 
+	// Check if there are pending pods that need IPs
+	numPendingPods, err := getPendingPodCount(n.name)
+	if err != nil {
+		if n.logLimiter.Allow() {
+			scopedLog.WithError(err).Warning("Unable to compute pending pods")
+		}
+		numPendingPods = 0
+	} else {
+		scopedLog.WithField("numPendingPods", numPendingPods).Info("Detected pending pods on node")
+	}
+
 	// Validate that the node still requires addresses to be allocated, the
 	// request may have been resolved in the meantime.
-	if stats.NeededIPs == 0 {
+	// However, if there are pending pods waiting for IPs, we should still
+	// attempt allocation even if NeededIPs is 0 (unused IPs might be on a full interface)
+	if stats.NeededIPs == 0 && numPendingPods == 0 {
 		return nil, nil
 	}
 
@@ -642,13 +681,13 @@ func (n *Node) determineMaintenanceAction() (*maintenanceAction, error) {
 	}
 
 	surgeAllocate := 0
-	numPendingPods, err := getPendingPodCount(n.name)
-	if err != nil {
-		if n.logLimiter.Allow() {
-			scopedLog.WithError(err).Warningf("Unable to compute pending pods, will not surge-allocate")
-		}
-	} else if numPendingPods > stats.NeededIPs {
+	if numPendingPods > stats.NeededIPs {
 		surgeAllocate = numPendingPods - stats.NeededIPs
+		scopedLog.WithFields(logrus.Fields{
+			"numPendingPods": numPendingPods,
+			"neededIPs":      stats.NeededIPs,
+			"surgeAllocate":  surgeAllocate,
+		}).Info("Surge-allocating for pending pods")
 	}
 
 	n.mutex.RLock()
@@ -873,8 +912,20 @@ func (n *Node) handleIPAllocation(ctx context.Context, a *maintenanceAction) (in
 		return false, nil
 	}
 
-	// Assign needed addresses
-	if a.allocation.AvailableForAllocation > 0 {
+	// Check if we have enough IPs available on existing interface
+	// If not, and we have empty interface slots, create a new interface first
+	needsNewInterface := false
+	if a.allocation.AvailableForAllocation < a.allocation.MaxIPsToAllocate && a.allocation.EmptyInterfaceSlots > 0 {
+		scopedLog.WithFields(logrus.Fields{
+			"availableForAllocation": a.allocation.AvailableForAllocation,
+			"maxIPsToAllocate":       a.allocation.MaxIPsToAllocate,
+			"emptyInterfaceSlots":    a.allocation.EmptyInterfaceSlots,
+		}).Info("Available IPs on existing interface insufficient, will create new interface first")
+		needsNewInterface = true
+	}
+
+	// Assign needed addresses from existing interface if sufficient or no empty slots
+	if a.allocation.AvailableForAllocation > 0 && !needsNewInterface {
 		a.allocation.AvailableForAllocation = math.IntMin(a.allocation.AvailableForAllocation, a.allocation.MaxIPsToAllocate)
 
 		start := time.Now()
@@ -947,6 +998,10 @@ func (n *Node) updateLastResync(syncTime time.Time) {
 // MaintainIPPool attempts to allocate or release all required IPs to fulfill
 // the needed gap. If required, interfaces are created.
 func (n *Node) MaintainIPPool(ctx context.Context) error {
+	n.logger().WithFields(logrus.Fields{
+		"node": n.name,
+	}).Info("MaintainIPPool called")
+
 	// As long as the instances API is unstable, don't perform any
 	// operation that can mutate state.
 	if !n.manager.InstancesAPIIsReady() {

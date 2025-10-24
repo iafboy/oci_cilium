@@ -17,6 +17,7 @@ package vnic
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/cilium/cilium/pkg/defaults"
 	"github.com/cilium/cilium/pkg/ipam"
@@ -124,14 +125,37 @@ func (n *Node) CreateInterface(ctx context.Context, allocation *ipam.AllocationA
 	}
 
 	ociSpec := resource.Spec.OCI
-	scopedLog.WithField("vcnID", ociSpec.VCNID).Info("Finding best subnet for VNIC allocation")
-	bestSubnet := n.manager.FindSubnet(ociSpec.VCNID, ociSpec.AvailabilityDomain, toAllocate, ociSpec.SubnetTags)
+
+	// If VCNID is not specified in the node spec, try to determine it from existing VNICs
+	vcnID := ociSpec.VCNID
+	if vcnID == "" {
+		// Get VCN ID from the primary VNIC
+		n.mutex.RLock()
+		for _, vnic := range n.vnics {
+			if vnic.IsPrimary {
+				vcnID = vnic.VCN.ID
+				scopedLog.WithField("vcnID", vcnID).Info("Using VCN ID from primary VNIC")
+				break
+			}
+		}
+		n.mutex.RUnlock()
+
+		// If still empty after detection, return error
+		if vcnID == "" {
+			return 0,
+				errUnableToFindSubnet,
+				fmt.Errorf("VCN ID not specified in spec and unable to detect from primary VNIC")
+		}
+	}
+
+	scopedLog.WithField("vcnID", vcnID).Info("Finding best subnet for VNIC allocation")
+	bestSubnet := n.manager.FindSubnet(vcnID, ociSpec.AvailabilityDomain, toAllocate, ociSpec.SubnetTags)
 	if bestSubnet == nil {
 		return 0,
 			errUnableToFindSubnet,
 			fmt.Errorf(
-				"no matching subnet available for interface creation (VCN=%s AZ=%s SubnetTags=%s",
-				ociSpec.VCNID,
+				"no matching subnet available for interface creation (VCN=%s AZ=%s SubnetTags=%s)",
+				vcnID,
 				ociSpec.AvailabilityDomain,
 				ociSpec.SubnetTags,
 			)
@@ -343,7 +367,11 @@ func (n *Node) ResyncInterfacesAndIPs(ctx context.Context, log *logrus.Entry) (t
 
 			for _, privateIP := range privateIPs {
 				if privateIP.IpAddress != nil {
-					available[*privateIP.IpAddress] = types.AllocationIP{Resource: *v.Id}
+					// Only add to available pool if it's NOT the primary VNIC's primary IP
+					// This matches the logic in the CiliumNode status cache path
+					if !(*v.IsPrimary && privateIP.IsPrimary != nil && *privateIP.IsPrimary) {
+						available[*privateIP.IpAddress] = types.AllocationIP{Resource: *v.Id}
+					}
 					vnic.Addresses = append(vnic.Addresses, *privateIP.IpAddress)
 				}
 			}
@@ -431,14 +459,37 @@ func (n *Node) PrepareIPAllocation(scopedLog *logrus.Entry) (*ipam.AllocationAct
 	n.mutex.RLock()
 	defer n.mutex.RUnlock()
 
-	for key, e := range n.vnics {
+	// Sort VNIC IDs for deterministic iteration order
+	vnicIDs := make([]string, 0, len(n.vnics))
+	for k := range n.vnics {
+		vnicIDs = append(vnicIDs, k)
+	}
+	sort.Strings(vnicIDs)
+
+	// First pass: collect all VNICs and find the best one with capacity
+	bestVNICKey := ""
+	bestAvailable := 0
+	totalUsedIPs := 0
+
+	for _, key := range vnicIDs {
+		e := n.vnics[key]
 		scopedLog.WithFields(logrus.Fields{
 			fieldVNICID: e.ID,
-			// "vnicname":  utils.GetVnicDisplayName(&e),
 			"ipv4Limit": l.IPv4,
 			"allocated": len(e.Addresses),
 			"isPrimary": e.IsPrimary,
-		}).Info("PrepareIPAllocation: considering VNIC for allocation")
+		}).Debug("PrepareIPAllocation: considering VNIC for allocation")
+
+		// Count used IPs on this VNIC from k8s status
+		usedIPsOnVNIC := 0
+		if n.k8sObj != nil && n.k8sObj.Status.IPAM.Used != nil {
+			for _, allocation := range n.k8sObj.Status.IPAM.Used {
+				if allocation.Resource == e.ID {
+					usedIPsOnVNIC++
+				}
+			}
+		}
+		totalUsedIPs += usedIPsOnVNIC
 
 		// Note: Unlike AWS ENI which skips primary ENI, OCI allows allocating
 		// secondary private IPs to the primary VNIC. This is the recommended
@@ -447,32 +498,54 @@ func (n *Node) PrepareIPAllocation(scopedLog *logrus.Entry) (*ipam.AllocationAct
 
 		availableOnVNIC := math.IntMax(l.IPv4-len(e.Addresses), 0)
 		if availableOnVNIC <= 0 {
+			scopedLog.WithFields(logrus.Fields{
+				fieldVNICID: e.ID,
+				"allocated": len(e.Addresses),
+				"limit":     l.IPv4,
+			}).Debug("VNIC is at capacity, skipping")
 			continue
 		}
 
 		a.InterfaceCandidates++
 		scopedLog.WithFields(logrus.Fields{
 			"availableOnVNIC": availableOnVNIC,
-		}).Info("VNIC has IPs available")
+			"usedIPsOnVNIC":   usedIPsOnVNIC,
+		}).Debug("VNIC has IPs available")
 
 		if subnet := n.manager.GetSubnet(e.Subnet.ID); subnet != nil {
-			if subnet.AvailableAddresses > 0 && a.InterfaceID == "" {
-				scopedLog.WithFields(logrus.Fields{
-					"subnetID":           e.Subnet.ID,
-					"availableAddresses": subnet.AvailableAddresses,
-				}).Info("Subnet has IPs available")
-
-				a.InterfaceID = key
-				a.PoolID = ipamTypes.PoolID(subnet.ID)
-				a.AvailableForAllocation = math.IntMin(subnet.AvailableAddresses, availableOnVNIC)
+			if subnet.AvailableAddresses > 0 {
+				available := math.IntMin(subnet.AvailableAddresses, availableOnVNIC)
+				if available > bestAvailable {
+					bestVNICKey = key
+					bestAvailable = available
+					a.PoolID = ipamTypes.PoolID(subnet.ID)
+					scopedLog.WithFields(logrus.Fields{
+						"subnetID":           e.Subnet.ID,
+						"availableAddresses": subnet.AvailableAddresses,
+						"bestAvailable":      bestAvailable,
+					}).Debug("Found better VNIC candidate")
+				}
 			}
 		}
 	}
 
+	// Set the best VNIC if found
+	if bestVNICKey != "" && bestAvailable > 0 {
+		a.InterfaceID = bestVNICKey
+		a.AvailableForAllocation = bestAvailable
+		scopedLog.WithFields(logrus.Fields{
+			"selectedVNIC":           bestVNICKey,
+			"availableForAllocation": a.AvailableForAllocation,
+		}).Info("Selected VNIC for IP allocation")
+	}
+
 	a.EmptyInterfaceSlots = l.Adapters - len(n.vnics)
 	log.WithFields(logrus.Fields{
-		"EmptyInterfaceSlots": a.EmptyInterfaceSlots,
-	}).Info("PrepareIPAllocation")
+		"EmptyInterfaceSlots":    a.EmptyInterfaceSlots,
+		"InterfaceID":            a.InterfaceID,
+		"AvailableForAllocation": a.AvailableForAllocation,
+		"totalUsedIPs":           totalUsedIPs,
+	}).Info("PrepareIPAllocation completed")
 
 	return a, nil
 }
@@ -503,14 +576,23 @@ func (n *Node) PrepareIPRelease(excessIPs int, scopedLog *logrus.Entry) *ipam.Re
 	n.mutex.Lock()
 	defer n.mutex.Unlock()
 
+	// Sort VNIC IDs for deterministic selection when multiple VNICs
+	// have IPs available for release (similar to AWS ENI implementation)
+	vnicIDs := make([]string, 0, len(n.vnics))
+	for k := range n.vnics {
+		vnicIDs = append(vnicIDs, k)
+	}
+	sort.Strings(vnicIDs)
+
 	// Iterate over VNICs on this node, select the VNIC with the most
 	// addresses available for release
-	for key, e := range n.vnics {
+	for _, key := range vnicIDs {
+		e := n.vnics[key]
 		scopedLog.WithFields(logrus.Fields{
 			fieldVNICID:    e.ID,
 			"numAddresses": len(e.Addresses),
 			"isPrimary":    e.IsPrimary,
-		}).Info("Considering VNIC for IP release")
+		}).Debug("Considering VNIC for IP release")
 
 		// Note: For OCI, we can release secondary private IPs from the primary VNIC.
 		// This is different from AWS where primary ENI is typically not managed.
@@ -521,7 +603,9 @@ func (n *Node) PrepareIPRelease(excessIPs int, scopedLog *logrus.Entry) *ipam.Re
 		freeIpsOnVNIC := []string{}
 		for _, ip := range ipsOnVNIC {
 			_, ipUsed := n.k8sObj.Status.IPAM.Used[ip]
-			if !ipUsed {
+			// Exclude primary VNIC's primary IP from release candidates
+			// to prevent releasing the node's main IP address
+			if !ipUsed && !(e.IsPrimary && ip == e.PrimaryIP) {
 				freeIpsOnVNIC = append(freeIpsOnVNIC, ip)
 			}
 		}

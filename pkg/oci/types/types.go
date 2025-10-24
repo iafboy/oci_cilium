@@ -67,6 +67,9 @@ type PrivateIP struct {
 
 	// IpAddress is the private IP address
 	IpAddress *string
+
+	// IsPrimary indicates whether this is the primary IP of the VNIC
+	IsPrimary *bool
 }
 
 // SecurityGroup is the representation of an OCI Security Group
