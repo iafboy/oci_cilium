@@ -1,0 +1,28 @@
+              oci:
+                description: OCI is the OCI IPAM specific configuration.
+                properties:
+                  shape:
+                    description: Shape is the OCI instance type, e.g. "VM.Standard.E5.Flex"
+                    type: string
+                  security-groups:
+                    description: SecurityGroups is the list of security groups to attach to any VNIC that is created and attached to the instance.
+                    items:
+                      type: string
+                    type: array
+                  security-group-tags:
+                    additionalProperties:
+                      type: string
+                    description: SecurityGroupTags is the list of tags to use when evaluating which security groups to use for the VNIC.
+                    type: object
+                  subnet-tags:
+                    additionalProperties:
+                      type: string
+                    description: SubnetTags is the list of tags to use when evaluating what OCI subnets to use for VNIC and IP allocation.
+                    type: object
+                  vcn-id:
+                    description: VCNID is the VCN ID to use when allocating VNICs.
+                    type: string
+                  availability-domain:
+                    description: AvailabilityDomain is the availability domain to use when allocating VNICs.
+                    type: string
+                type: object
