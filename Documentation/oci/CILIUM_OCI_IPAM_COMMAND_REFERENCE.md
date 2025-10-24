@@ -28,10 +28,10 @@ helm install cilium ./install/kubernetes/cilium \
   --set oci.vcnID="<vcn-ocid>" \
   --set oci.subnetOCID="<subnet-ocid>" \
   --set oci.useInstancePrincipal=true \
-  --set image.repository=sin.ocir.io/sehubjapacprod/munger \
-  --set image.tag=cilium-agent \
-  --set operator.image.repository=sin.ocir.io/sehubjapacprod/munger \
-  --set operator.image.tag=cilium-operator-oci \
+  --set image.repository=sin.ocir.io/sehubjapacprod/munger/agent \
+  --set image.tag=latest \
+  --set operator.image.repository=sin.ocir.io/sehubjapacprod/munger/operator \
+  --set operator.image.tag=test-fix4 \
   --set tunnel=disabled \
   --set autoDirectNodeRoutes=true
 
@@ -92,16 +92,39 @@ docker login sin.ocir.io \
   -p '<auth-token>'
 
 # === 拉取镜像 ===
-docker pull sin.ocir.io/sehubjapacprod/munger:cilium-agent
-docker pull sin.ocir.io/sehubjapacprod/munger:cilium-operator-oci
+docker pull sin.ocir.io/sehubjapacprod/munger/agent:latest
+docker pull sin.ocir.io/sehubjapacprod/munger/operator:test-fix4
 
 # === 查看本地镜像 ===
-docker images | grep cilium
+docker images | grep munger
+
+# === 构建自定义镜像 ===
+# 构建Operator镜像（支持OCI IPAM）
+cd /path/to/cilium-source
+make build-container-operator-oci \
+  DOCKER_DEV_ACCOUNT=sin.ocir.io/sehubjapacprod/munger \
+  DOCKER_IMAGE_TAG=test-fix4 \
+  DOCKER_FLAGS="--push"
+
+# 构建Agent镜像
+make build-container-agent \
+  DOCKER_DEV_ACCOUNT=sin.ocir.io/sehubjapacprod/munger \
+  DOCKER_IMAGE_TAG=latest \
+  DOCKER_FLAGS="--push"
+
+# === 验证镜像内容 ===
+# 验证Operator包含OCI IPAM支持
+docker run --rm sin.ocir.io/sehubjapacprod/munger/operator:test-fix4 \
+  cilium-operator-oci --version
+
+# 列出二进制文件
+docker run --rm sin.ocir.io/sehubjapacprod/munger/operator:test-fix4 \
+  ls -la /usr/bin/ | grep cilium
 
 # === 导出镜像（离线环境） ===
-docker save sin.ocir.io/sehubjapacprod/munger:cilium-agent \
+docker save sin.ocir.io/sehubjapacprod/munger/agent:latest \
   -o cilium-agent.tar
-docker save sin.ocir.io/sehubjapacprod/munger:cilium-operator-oci \
+docker save sin.ocir.io/sehubjapacprod/munger/operator:test-fix4 \
   -o cilium-operator.tar
 
 # === 导入镜像 ===
@@ -505,6 +528,52 @@ kubectl get events -A --sort-by='.lastTimestamp' > events.txt
 # 打包
 cd ..
 tar czf cilium-debug-$(date +%Y%m%d-%H%M%S).tar.gz cilium-debug-$(date +%Y%m%d-%H%M%S)/
+```
+
+### 4.6 Operator特定问题诊断
+
+```bash
+# === 检查Operator镜像是否支持OCI IPAM ===
+# 列出Operator容器中的二进制文件
+kubectl exec -n kube-system deployment/cilium-operator -- ls -la /usr/bin/
+
+# 应该看到 cilium-operator-oci 文件
+# 如果只有 cilium-operator-generic，说明镜像不正确
+
+# === 验证Operator版本和构建信息 ===
+kubectl exec -n kube-system deployment/cilium-operator -- \
+  cilium-operator-oci --version
+
+# === 检查Operator环境变量 ===
+kubectl exec -n kube-system deployment/cilium-operator -- env | grep -i oci
+
+# === 测试OCI API访问（从Operator Pod） ===
+kubectl exec -n kube-system deployment/cilium-operator -- \
+  curl -s http://169.254.169.254/opc/v2/instance/ | head -20
+
+# === 检查Operator启动参数 ===
+kubectl describe pod -n kube-system -l name=cilium-operator | grep -A 10 "Command:"
+
+# === 重建Operator Pod（使用新镜像） ===
+# 1. 删除现有Deployment
+kubectl delete deployment cilium-operator -n kube-system
+
+# 2. 等待几秒
+sleep 5
+
+# 3. Helm升级（会重新创建Deployment）
+helm upgrade cilium ./install/kubernetes/cilium \
+  --namespace kube-system \
+  --reuse-values \
+  --set operator.image.tag=test-fix4 \
+  --force
+
+# 4. 验证新Pod运行正常
+kubectl wait --for=condition=Ready pod -l name=cilium-operator \
+  -n kube-system --timeout=120s
+
+# 5. 检查日志确认OCI provider已加载
+kubectl logs -n kube-system deployment/cilium-operator | grep -i "oci.*init"
 ```
 
 ---

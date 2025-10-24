@@ -238,27 +238,67 @@ Allow group cilium-users to inspect vcns in compartment <compartment-name>
 
 | 镜像 | 大小 | 说明 |
 |------|------|------|
-| `sin.ocir.io/sehubjapacprod/munger:cilium-agent` | 589MB | Cilium Agent (含OCI IPAM) |
-| `sin.ocir.io/sehubjapacprod/munger:cilium-operator-oci` | 142MB | Cilium Operator |
+| `sin.ocir.io/sehubjapacprod/munger/agent:latest` | 589MB | Cilium Agent (含OCI IPAM) |
+| `sin.ocir.io/sehubjapacprod/munger/operator:test-fix4` | 142MB | Cilium Operator (OCI IPAM) |
 | `quay.io/cilium/hubble-relay:v1.15.2` | 45MB | Hubble Relay (可选) |
 | `quay.io/cilium/hubble-ui:v0.12.1` | 32MB | Hubble UI (可选) |
 | `quay.io/cilium/hubble-ui-backend:v0.12.1` | 28MB | Hubble UI Backend (可选) |
 
-### 4.2 使用OCI Registry（推荐）
+### 4.2 构建OCI IPAM镜像
+
+#### 构建Cilium Operator（支持OCI IPAM）
+
+```bash
+# 进入项目目录
+cd /home/ubuntu/xiaomi-cilium/cilium-official-fork-1022
+
+# 构建并推送Operator镜像到OCI Registry
+make build-container-operator-oci \
+  DOCKER_DEV_ACCOUNT=sin.ocir.io/sehubjapacprod/munger \
+  DOCKER_IMAGE_TAG=test-fix4 \
+  DOCKER_FLAGS="--push"
+
+# 等待构建完成，应该看到：
+# Successfully built operator image
+# Successfully pushed to sin.ocir.io/sehubjapacprod/munger/operator:test-fix4
+```
+
+#### 构建Cilium Agent
+
+```bash
+# 构建并推送Agent镜像（如需自定义）
+make build-container-agent \
+  DOCKER_DEV_ACCOUNT=sin.ocir.io/sehubjapacprod/munger \
+  DOCKER_IMAGE_TAG=latest \
+  DOCKER_FLAGS="--push"
+```
+
+**注意事项：**
+- 构建过程需要15-20分钟
+- 确保Docker已登录OCI Registry
+- 构建完成后验证镜像是否成功推送
+
+### 4.3 使用OCI Registry（推荐）
 
 #### 登录OCI Registry
 
 ```bash
 # 获取Auth Token (OCI Console -> User Settings -> Auth Tokens)
 docker login sin.ocir.io -u '<tenancy-namespace>/<username>' -p '<auth-token>'
+
+# 验证登录
+docker info | grep -A 3 "Registry Mirrors"
 ```
 
 #### 从私有Registry拉取镜像
 
 ```bash
-# 在每个节点上执行
-docker pull sin.ocir.io/sehubjapacprod/munger:cilium-agent
-docker pull sin.ocir.io/sehubjapacprod/munger:cilium-operator-oci
+# 在每个节点上执行（或通过imagePullSecrets自动拉取）
+docker pull sin.ocir.io/sehubjapacprod/munger/agent:latest
+docker pull sin.ocir.io/sehubjapacprod/munger/operator:test-fix4
+
+# 验证镜像
+docker images | grep munger
 ```
 
 #### 创建imagePullSecrets
@@ -269,16 +309,19 @@ kubectl create secret docker-registry ocir-secret \
   --docker-username='<tenancy-namespace>/<username>' \
   --docker-password='<auth-token>' \
   -n kube-system
+
+# 验证Secret创建
+kubectl get secret ocir-secret -n kube-system
 ```
 
-### 4.3 离线镜像导入（无Internet访问）
+### 4.4 离线镜像导入（无Internet访问）
 
 适用于无法访问外网的环境：
 
 ```bash
 # === 步骤1: 在有网环境导出镜像 ===
-docker save sin.ocir.io/sehubjapacprod/munger:cilium-agent -o cilium-agent.tar
-docker save sin.ocir.io/sehubjapacprod/munger:cilium-operator-oci -o cilium-operator.tar
+docker save sin.ocir.io/sehubjapacprod/munger/agent:latest -o cilium-agent.tar
+docker save sin.ocir.io/sehubjapacprod/munger/operator:test-fix4 -o cilium-operator.tar
 
 # === 步骤2: 传输到各节点 ===
 scp cilium-agent.tar ubuntu@<node-ip>:/tmp/
@@ -288,6 +331,9 @@ scp cilium-operator.tar ubuntu@<node-ip>:/tmp/
 ssh ubuntu@<node-ip>
 docker load -i /tmp/cilium-agent.tar
 docker load -i /tmp/cilium-operator.tar
+
+# 验证镜像已导入
+docker images | grep munger
 ```
 
 ---
@@ -321,8 +367,8 @@ cluster:
 
 # --- 镜像配置 ---
 image:
-  repository: sin.ocir.io/sehubjapacprod/munger
-  tag: cilium-agent
+  repository: sin.ocir.io/sehubjapacprod/munger/agent
+  tag: latest
   pullPolicy: IfNotPresent
 
 imagePullSecrets:
@@ -330,8 +376,8 @@ imagePullSecrets:
 
 operator:
   image:
-    repository: sin.ocir.io/sehubjapacprod/munger
-    tag: cilium-operator-oci
+    repository: sin.ocir.io/sehubjapacprod/munger/operator
+    tag: test-fix4
     pullPolicy: IfNotPresent
   replicas: 1
 
@@ -432,10 +478,10 @@ helm install cilium ./install/kubernetes/cilium \
   --set oci.vcnID="ocid1.vcn.oc1.ap-singapore-1.xxxxx" \
   --set oci.subnetOCID="ocid1.subnet.oc1.ap-singapore-1.xxxxx" \
   --set oci.useInstancePrincipal=true \
-  --set image.repository=sin.ocir.io/sehubjapacprod/munger \
-  --set image.tag=cilium-agent \
-  --set operator.image.repository=sin.ocir.io/sehubjapacprod/munger \
-  --set operator.image.tag=cilium-operator-oci \
+  --set image.repository=sin.ocir.io/sehubjapacprod/munger/agent \
+  --set image.tag=latest \
+  --set operator.image.repository=sin.ocir.io/sehubjapacprod/munger/operator \
+  --set operator.image.tag=test-fix4 \
   --set tunnel=disabled \
   --set autoDirectNodeRoutes=true
 ```
@@ -1053,6 +1099,83 @@ helm upgrade cilium ./install/kubernetes/cilium \
   --force \
   --values oci-ipam-values.yaml
 ```
+
+### 9.6 Operator镜像和权限问题
+
+#### Q10: Operator Pod启动失败或OCI API调用权限错误
+
+**症状：**
+```bash
+# Operator日志显示权限错误
+kubectl logs -n kube-system deployment/cilium-operator
+# Error: operator.cloud is not defined in the build
+
+# 或者
+# Error: 401 Unauthorized when calling OCI API
+```
+
+**原因：**
+Operator镜像构建时未正确包含OCI IPAM provider，导致运行时缺少OCI API访问能力。
+
+**解决方案：**
+
+1. **重新构建Operator镜像（包含OCI IPAM支持）**
+```bash
+cd /home/ubuntu/xiaomi-cilium/cilium-official-fork-1022
+
+# 使用正确的构建目标
+make build-container-operator-oci \
+  DOCKER_DEV_ACCOUNT=sin.ocir.io/sehubjapacprod/munger \
+  DOCKER_IMAGE_TAG=test-fix4 \
+  DOCKER_FLAGS="--push"
+
+# 验证镜像构建成功
+docker images | grep operator
+```
+
+2. **检查Makefile配置**
+```bash
+# 确保 install/kubernetes/Makefile.values 中定义了 operator.cloud
+grep "operator.cloud" ./install/kubernetes/Makefile.values
+
+# 应该看到类似：
+# operator.cloud ?= generic
+```
+
+3. **更新Helm部署使用新镜像**
+```bash
+# 删除旧的部署
+kubectl delete deployment cilium-operator -n kube-system
+
+# 使用新镜像重新安装
+helm upgrade cilium ./install/kubernetes/cilium \
+  --namespace kube-system \
+  --reuse-values \
+  --set operator.image.tag=test-fix4 \
+  --force
+```
+
+4. **验证Operator运行正常**
+```bash
+# 检查Pod状态
+kubectl get pods -n kube-system -l name=cilium-operator
+
+# 查看日志确认OCI API访问正常
+kubectl logs -n kube-system deployment/cilium-operator | grep -i oci
+
+# 应该看到类似：
+# level=info msg="OCI IPAM provider initialized"
+# level=info msg="Successfully connected to OCI API"
+```
+
+**预防措施：**
+- 始终使用 `make build-container-operator-oci` 而不是通用的 operator 目标
+- 在CI/CD流程中添加构建验证步骤
+- 部署前验证镜像是否包含OCI provider：
+  ```bash
+  docker run --rm sin.ocir.io/sehubjapacprod/munger/operator:test-fix4 \
+    cilium-operator-oci --version
+  ```
 
 ---
 
