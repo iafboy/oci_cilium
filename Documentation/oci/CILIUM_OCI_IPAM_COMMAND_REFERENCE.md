@@ -1363,5 +1363,5 @@ alias cill='kubectl -n kube-system logs -l k8s-app=cilium'
 ---
 
 **文档版本：** 1.0  
-**最后更新：** 2025年10月21日  
+**最后更新：** 2025年10月24日  
 **维护人：** Dengwei

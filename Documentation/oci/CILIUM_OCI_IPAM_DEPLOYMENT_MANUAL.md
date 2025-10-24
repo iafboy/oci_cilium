@@ -1227,5 +1227,5 @@ kubectl delete crd ciliumnodes.cilium.io
 ---
 
 **文档版本：** 1.0  
-**最后更新：** 2025年10月21日  
+**最后更新：** 2025年10月24日  
 **维护人：** Dengwei
