@@ -14,6 +14,6 @@ Project Status
 
 Unit and integration tests have been completed. The software installation package is not complete.
 
-Thanks Alex.Wang jingsong.liu Jim Kong WeiDeng for their contributions to this project.
+Thanks Alex.Wong Jingsong.liu Jim Kong WeiDeng for their contributions to this project.
 
 2025-10-24
