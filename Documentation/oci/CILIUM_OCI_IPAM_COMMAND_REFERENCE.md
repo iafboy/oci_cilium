@@ -683,7 +683,228 @@ oci iam policy create \
 
 ## 6. 多VNIC操作
 
-### 6.1 创建VNIC
+### 6.0 Subnet Tags自动VNIC创建（推荐）🚀
+
+```bash
+# ==========================================
+# 步骤1: 为Subnet添加Freeform Tag
+# ==========================================
+SUBNET_ID="ocid1.subnet.oc1.ap-singapore-2.aaaaaaaatzyuguxvg52366p4bimpxcxkbkllqsrurbdaa5rxjjblvu2tu3da"
+TAG_KEY="cilium-pod-network"
+TAG_VALUE="yes"
+
+oci network subnet update \
+  --subnet-id $SUBNET_ID \
+  --freeform-tags "{\"${TAG_KEY}\":\"${TAG_VALUE}\"}" \
+  --auth instance_principal
+
+# 验证Tag配置
+oci network subnet get \
+  --subnet-id $SUBNET_ID \
+  --auth instance_principal \
+  --query 'data.{"CIDR":"cidr-block","Tags":"freeform-tags"}'
+
+# ==========================================
+# 步骤2: 配置Cilium使用Subnet Tags
+# ==========================================
+# 获取VCN ID
+VCN_ID=$(kubectl get ciliumnode -o jsonpath='{.items[0].spec.oci.vcn-id}')
+
+# 方法1：使用已有的operator.extraArgs更新（推荐）
+# 先查看当前配置
+kubectl get deployment cilium-operator -n kube-system \
+  -o jsonpath='{.spec.template.spec.containers[0].args}' | jq -r '.[]'
+
+# 更新Helm配置（同时配置两处）
+helm upgrade cilium ./install/kubernetes/cilium \
+  --namespace kube-system \
+  --reuse-values \
+  --set oci.subnetTags.${TAG_KEY}="${TAG_VALUE}" \
+  --set-string "operator.extraArgs={--oci-vcn-id=${VCN_ID},--oci-use-instance-principal=true,--subnet-tags-filter=${TAG_KEY}=${TAG_VALUE}}"
+
+# 方法2：使用values.yaml文件（初始部署推荐）
+cat > subnet-tags-values.yaml <<EOF
+oci:
+  enabled: true
+  subnetTags:
+    ${TAG_KEY}: "${TAG_VALUE}"
+
+operator:
+  extraArgs:
+    - --oci-vcn-id=${VCN_ID}
+    - --oci-use-instance-principal=true
+    - --subnet-tags-filter=${TAG_KEY}=${TAG_VALUE}
+EOF
+
+helm upgrade cilium ./install/kubernetes/cilium \
+  --namespace kube-system \
+  --reuse-values \
+  -f subnet-tags-values.yaml
+
+# ==========================================
+# 步骤3: 验证配置生效
+# ==========================================
+# 等待Operator重启
+kubectl rollout status deployment/cilium-operator -n kube-system
+
+# 检查Operator启动参数（关键验证！）
+kubectl logs -n kube-system deployment/cilium-operator --tail=200 | grep subnet-tags-filter
+
+# ✅ 正确输出：
+# level=info msg="  --subnet-tags-filter='cilium-pod-network=yes'" subsys=cilium-operator-oci
+
+# ❌ 错误输出（说明配置未生效）：
+# level=info msg="  --subnet-tags-filter=''" subsys=cilium-operator-oci
+
+# 如果未生效，需要重新执行步骤2，确保operator.extraArgs正确配置
+
+# ==========================================
+# 步骤4: 创建测试Pods触发自动VNIC创建
+# ==========================================
+NODE_NAME="cilium-w1"  # 指定测试节点
+
+# 检查初始VNIC数量
+echo "初始VNIC数量:"
+kubectl get ciliumnode $NODE_NAME -o jsonpath='{.status.oci.vnics}' | jq 'keys | length'
+
+# 创建大量Pods（超过现有VNIC容量）
+for i in {1..40}; do
+  kubectl run test-auto-vnic-$i \
+    --image=busybox \
+    --overrides="{\"spec\":{\"nodeSelector\":{\"kubernetes.io/hostname\":\"$NODE_NAME\"}}}" \
+    -- sleep 3600
+done
+
+# ==========================================
+# 步骤5: 监控VNIC自动创建
+# ==========================================
+# 实时监控VNIC数量变化（另一个终端运行）
+watch -n 5 "kubectl get ciliumnode $NODE_NAME -o jsonpath='{.status.oci.vnics}' | jq 'keys | length'"
+
+# 查看Operator日志（观察自动创建过程）
+kubectl logs -n kube-system deployment/cilium-operator -f | \
+  grep -iE "vnic|subnet.*tag|creating|attaching|better.*candidate"
+
+# 你应该看到类似的日志：
+# level=info msg="Found better VNIC candidate" subnetID=ocid1.subnet...tu3da
+# level=info msg="Resolving IP deficit of node" name=cilium-w1
+# level=warning msg="Unable to assign additional IPs to interface, will create new interface"
+
+# ==========================================
+# 步骤6: 验证自动创建的VNIC
+# ==========================================
+# 查看最终VNIC数量
+echo "最终VNIC数量:"
+kubectl get ciliumnode $NODE_NAME -o jsonpath='{.status.oci.vnics}' | jq 'keys | length'
+
+# 查看所有VNIC及其Subnet CIDR
+echo "VNIC详情:"
+kubectl get ciliumnode $NODE_NAME -o jsonpath='{.status.oci.vnics}' | \
+  jq -r 'to_entries[] | "\(.key | split(".") | .[4]): \(.value.subnet.cidr)"'
+
+# 统计各Subnet的Pod数量
+echo "Pod IP分布统计:"
+for subnet in "10.0.0" "10.0.3" "10.0.4"; do
+  count=$(kubectl get pods -l run=test-auto-vnic -o jsonpath='{.items[*].status.podIP}' | \
+    tr ' ' '\n' | grep "^${subnet}\." | wc -l)
+  echo "${subnet}.0/xx: $count 个Pods"
+done
+
+# 查看Pod详情（按IP排序）
+kubectl get pods -l run=test-auto-vnic -o wide --sort-by=.status.podIP
+
+# ==========================================
+# 步骤7: 测试网络连通性
+# ==========================================
+# 获取不同VNIC的Pod IP
+POD_VNIC1=$(kubectl get pods -o jsonpath='{.items[*].status.podIP}' | tr ' ' '\n' | grep "^10.0.0" | head -1)
+POD_VNIC_NEW=$(kubectl get pods -o jsonpath='{.items[*].status.podIP}' | tr ' ' '\n' | grep "^10.0.4" | head -1)
+
+# 测试跨VNIC通信
+kubectl run test-ping --image=busybox --rm -it --restart=Never -- sh -c "
+  echo 'Testing connectivity...'
+  echo 'Ping VNIC1: $POD_VNIC1'
+  ping -c 3 $POD_VNIC1 && echo 'VNIC1 OK ✅'
+  echo 'Ping New VNIC: $POD_VNIC_NEW'
+  ping -c 3 $POD_VNIC_NEW && echo 'New VNIC OK ✅'
+"
+
+# ==========================================
+# 步骤8: 清理测试资源
+# ==========================================
+# 删除测试Pods
+kubectl delete pods -l run=test-auto-vnic --wait=false
+
+# 监控Pod删除
+kubectl get pods -l run=test-auto-vnic --watch
+
+# 注意：自动创建的VNIC不会自动删除，需要手动清理（如果需要）
+```
+
+### 6.0.1 故障排查速查
+
+```bash
+# === 问题1: VNIC没有自动创建 ===
+# 检查配置是否生效
+kubectl logs -n kube-system deployment/cilium-operator --tail=100 | grep subnet-tags-filter
+# 期望看到: --subnet-tags-filter='cilium-pod-network=yes'
+
+# 检查Subnet Tag
+oci network subnet get --subnet-id <subnet-ocid> --query 'data."freeform-tags"'
+# 期望看到: {"cilium-pod-network": "yes"}
+
+# 检查IAM权限
+kubectl logs -n kube-system deployment/cilium-operator | grep -i "unauthorized\|forbidden"
+
+# 检查实例VNIC限制
+oci compute shape list --compartment-id <compartment-ocid> | grep -A 5 "VM.Standard.E4"
+
+# === 问题2: Pod卡在ContainerCreating ===
+# 查看Pod事件
+kubectl describe pod <pod-name> | tail -20
+# 常见错误: "No more IPs available"
+
+# 检查Subnet IP容量
+oci network subnet get --subnet-id <subnet-ocid> --query 'data."cidr-block"'
+# /28只有13个可用IP，建议使用/24或更大
+
+# === 问题3: 配置更新未生效 ===
+# 强制重启Operator
+kubectl rollout restart deployment/cilium-operator -n kube-system
+kubectl rollout status deployment/cilium-operator -n kube-system
+
+# 重新检查参数
+kubectl logs -n kube-system deployment/cilium-operator --tail=50 | grep subnet-tags-filter
+```
+
+### 6.0.2 多Subnet Tag配置
+
+```bash
+# 为多个Subnet添加相同的Tag
+SUBNETS=(
+  "ocid1.subnet.oc1...subnet1"
+  "ocid1.subnet.oc1...subnet2"
+  "ocid1.subnet.oc1...subnet3"
+)
+
+for subnet_id in "${SUBNETS[@]}"; do
+  echo "Adding tag to: $subnet_id"
+  oci network subnet update \
+    --subnet-id $subnet_id \
+    --freeform-tags '{"cilium-pod-network":"yes","environment":"production"}' \
+    --auth instance_principal
+done
+
+# 配置Cilium使用多个Tag过滤
+helm upgrade cilium ./install/kubernetes/cilium \
+  --namespace kube-system \
+  --reuse-values \
+  --set-string 'operator.extraArgs={--oci-vcn-id=<vcn-ocid>,--oci-use-instance-principal=true,--subnet-tags-filter=cilium-pod-network=yes,environment=production}'
+
+# Cilium会从所有匹配这些Tag的Subnet中选择创建VNIC
+```
+
+### 6.1 手动创建VNIC（传统方式）
 
 ```bash
 # === 创建VNIC Attachment ===
