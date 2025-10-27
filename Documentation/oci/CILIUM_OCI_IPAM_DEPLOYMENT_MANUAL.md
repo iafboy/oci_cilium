@@ -238,47 +238,121 @@ Allow group cilium-users to inspect vcns in compartment <compartment-name>
 
 | 镜像 | 大小 | 说明 |
 |------|------|------|
-| `sin.ocir.io/sehubjapacprod/munger/agent:latest` | 589MB | Cilium Agent (含OCI IPAM) |
-| `sin.ocir.io/sehubjapacprod/munger/operator:test-fix4` | 142MB | Cilium Operator (OCI IPAM) |
+| `sin.ocir.io/sehubjapacprod/munger/cilium:test-fix1027` | 589MB | Cilium Agent (含OCI IPAM) |
+| `sin.ocir.io/sehubjapacprod/munger/operator-oci:test-fix1027` | 99.9MB | Cilium Operator OCI专用版本 |
 | `quay.io/cilium/hubble-relay:v1.15.2` | 45MB | Hubble Relay (可选) |
 | `quay.io/cilium/hubble-ui:v0.12.1` | 32MB | Hubble UI (可选) |
 | `quay.io/cilium/hubble-ui-backend:v0.12.1` | 28MB | Hubble UI Backend (可选) |
 
 ### 4.2 构建OCI IPAM镜像
 
-#### 构建Cilium Operator（支持OCI IPAM）
+⚠️ **重要提示**: 
+1. Agent和Operator需要**分别编译**，不能在一个命令中同时完成
+2. **必须使用 `docker-operator-oci-image`** target，不是 `docker-operator-image`
+3. 编译顺序无要求，但必须使用正确的make target
+
+#### 步骤1: 编译Cilium Agent镜像
 
 ```bash
 # 进入项目目录
 cd /home/ubuntu/xiaomi-cilium/cilium-official-fork-1022
 
-# 构建并推送Operator镜像到OCI Registry
-make build-container-operator-oci \
-  DOCKER_DEV_ACCOUNT=sin.ocir.io/sehubjapacprod/munger \
-  DOCKER_IMAGE_TAG=test-fix4 \
-  DOCKER_FLAGS="--push"
+# 编译Agent镜像
+make DOCKER_REGISTRY=sin.ocir.io/sehubjapacprod \
+     DOCKER_DEV_ACCOUNT=munger \
+     DOCKER_IMAGE_TAG=test-fix1027 \
+     docker-cilium-image
 
-# 等待构建完成，应该看到：
-# Successfully built operator image
-# Successfully pushed to sin.ocir.io/sehubjapacprod/munger/operator:test-fix4
+# 等待编译完成（约10-15分钟）
+# 输出镜像: sin.ocir.io/sehubjapacprod/munger/cilium:test-fix1027
+# 镜像大小: ~589MB
 ```
 
-#### 构建Cilium Agent
+#### 步骤2: 编译Cilium Operator OCI镜像
+
+⚠️ **关键**: 必须使用 `docker-operator-oci-image` target
 
 ```bash
-# 构建并推送Agent镜像（如需自定义）
-make build-container-agent \
-  DOCKER_DEV_ACCOUNT=sin.ocir.io/sehubjapacprod/munger \
-  DOCKER_IMAGE_TAG=latest \
-  DOCKER_FLAGS="--push"
+# 编译OCI专用Operator镜像
+make DOCKER_REGISTRY=sin.ocir.io/sehubjapacprod \
+     DOCKER_DEV_ACCOUNT=munger \
+     DOCKER_IMAGE_TAG=test-fix1027 \
+     docker-operator-oci-image
+
+# 等待编译完成（约5-8分钟）
+# 输出镜像: sin.ocir.io/sehubjapacprod/munger/operator-oci:test-fix1027
+# 镜像大小: ~99.9MB
+# 二进制名称: cilium-operator-oci
 ```
 
-**注意事项：**
-- 构建过程需要3-5分钟
-- 确保Docker已登录OCI Registry
-- 构建完成后验证镜像是否成功推送
+**说明**:
+- `docker-operator-oci-image`: ✅ 构建OCI专用operator (99.9MB)，二进制名为 `cilium-operator-oci`
+- `docker-operator-image`: ❌ 构建通用operator (159MB)，包含所有provider，二进制名为 `cilium-operator`
+- OCI环境**必须**使用OCI专用版本，否则会出现 "executable file not found" 错误
 
-### 4.3 使用OCI Registry（推荐）
+#### 常见错误与解决方案
+
+**错误1**: 使用了错误的target
+```bash
+# ❌ 错误 - 不要使用这个
+make docker-operator-image
+
+# ✅ 正确 - 使用这个
+make docker-operator-oci-image
+```
+
+**错误2**: Operator启动失败，提示 "executable file not found"
+```
+Error: failed to create containerd task: failed to create shim task: 
+OCI runtime create failed: runc create failed: unable to start container process: 
+exec: "cilium-operator-oci": executable file not found in $PATH: unknown
+```
+
+**原因**: 使用了 `docker-operator-image` 生成的镜像，其中只有 `cilium-operator` 而没有 `cilium-operator-oci`
+
+**解决方案**: 
+```bash
+# 1. 删除错误的镜像
+docker rmi sin.ocir.io/sehubjapacprod/munger/operator:test-fix1027
+
+# 2. 使用正确的target重新编译
+make DOCKER_REGISTRY=sin.ocir.io/sehubjapacprod \
+     DOCKER_DEV_ACCOUNT=munger \
+     DOCKER_IMAGE_TAG=test-fix1027 \
+     docker-operator-oci-image
+
+# 3. 验证镜像内容
+docker run --rm --entrypoint ls sin.ocir.io/sehubjapacprod/munger/operator-oci:test-fix1027 /usr/bin/ | grep cilium-operator
+# 应该看到: cilium-operator-oci
+```
+
+#### 推送镜像到Registry
+
+```bash
+# 推送Agent镜像
+docker push sin.ocir.io/sehubjapacprod/munger/cilium:test-fix1027
+
+# 推送Operator镜像
+docker push sin.ocir.io/sehubjapacprod/munger/operator-oci:test-fix1027
+
+# 验证推送成功
+docker pull sin.ocir.io/sehubjapacprod/munger/cilium:test-fix1027
+docker pull sin.ocir.io/sehubjapacprod/munger/operator-oci:test-fix1027
+```
+
+### 4.3 Makefile Target说明
+
+| Target | 用途 | 输出镜像名 | 二进制名称 | 大小 |
+|--------|------|-----------|-----------|------|
+| `docker-operator-oci-image` | ✅ OCI专用operator | `operator-oci` | `cilium-operator-oci` | ~100MB |
+| `docker-operator-aws-image` | AWS专用operator | `operator-aws` | `cilium-operator-aws` | ~100MB |
+| `docker-operator-azure-image` | Azure专用operator | `operator-azure` | `cilium-operator-azure` | ~100MB |
+| `docker-operator-generic-image` | 通用operator | `operator-generic` | `cilium-operator-generic` | ~92MB |
+| `docker-operator-image` | ❌ 包含所有provider | `operator` | `cilium-operator` | ~159MB |
+
+**模式匹配规则**: Makefile使用 `docker-opera%-image` 模式，`%` 匹配的部分决定variant类型
+
+### 4.4 使用OCI Registry（推荐）
 
 #### 登录OCI Registry
 
@@ -294,8 +368,8 @@ docker info | grep -A 3 "Registry Mirrors"
 
 ```bash
 # 在每个节点上执行（或通过imagePullSecrets自动拉取）
-docker pull sin.ocir.io/sehubjapacprod/munger/agent:latest
-docker pull sin.ocir.io/sehubjapacprod/munger/operator:test-fix4
+docker pull sin.ocir.io/sehubjapacprod/munger/cilium:test-fix1027
+docker pull sin.ocir.io/sehubjapacprod/munger/operator-oci:test-fix1027
 
 # 验证镜像
 docker images | grep munger
@@ -314,14 +388,14 @@ kubectl create secret docker-registry ocir-secret \
 kubectl get secret ocir-secret -n kube-system
 ```
 
-### 4.4 离线镜像导入（无Internet访问）
+### 4.5 离线镜像导入（无Internet访问）
 
 适用于无法访问外网的环境：
 
 ```bash
 # === 步骤1: 在有网环境导出镜像 ===
-docker save sin.ocir.io/sehubjapacprod/munger/agent:latest -o cilium-agent.tar
-docker save sin.ocir.io/sehubjapacprod/munger/operator:test-fix4 -o cilium-operator.tar
+docker save sin.ocir.io/sehubjapacprod/munger/cilium:test-fix1027 -o cilium-agent.tar
+docker save sin.ocir.io/sehubjapacprod/munger/operator-oci:test-fix1027 -o cilium-operator.tar
 
 # === 步骤2: 传输到各节点 ===
 scp cilium-agent.tar ubuntu@<node-ip>:/tmp/
@@ -478,10 +552,11 @@ helm install cilium ./install/kubernetes/cilium \
   --set oci.vcnID="ocid1.vcn.oc1.ap-singapore-1.xxxxx" \
   --set oci.subnetOCID="ocid1.subnet.oc1.ap-singapore-1.xxxxx" \
   --set oci.useInstancePrincipal=true \
-  --set image.repository=sin.ocir.io/sehubjapacprod/munger/agent \
-  --set image.tag=latest \
-  --set operator.image.repository=sin.ocir.io/sehubjapacprod/munger/operator \
-  --set operator.image.tag=test-fix4 \
+  --set image.repository=sin.ocir.io/sehubjapacprod/munger/cilium \
+  --set image.tag=test-fix1027 \
+  --set operator.image.repository=sin.ocir.io/sehubjapacprod/munger/operator-oci \
+  --set operator.image.tag=test-fix1027 \
+  --set operator.image.suffix="" \
   --set tunnel=disabled \
   --set autoDirectNodeRoutes=true
 ```
@@ -732,7 +807,7 @@ kubectl logs -n kube-system deployment/cilium-operator --tail=200 | grep subnet-
 #### 步骤4: 测试自动VNIC创建
 
 ```bash
-# 创建大量Pods触发自动VNIC创建,测试环境使用了28的子网，会创建多块vnic
+# 创建大量Pods触发自动VNIC创建
 for i in {1..40}; do
   kubectl run test-auto-vnic-$i \
     --image=busybox \
@@ -1419,9 +1494,12 @@ kubectl delete crd ciliumnodes.cilium.io
 
 ### 10.3 技术支持
 
+遇到问题请联系：
+- **邮箱**: CE&&SEHUB 
+
 
 ---
 
 **文档版本：** 1.0  
-**最后更新：** 2025年10月24日  
+**最后更新：** 2025年10月27日  
 **维护人：** Dengwei

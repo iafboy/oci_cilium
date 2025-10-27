@@ -1,799 +1,765 @@
-# Cilium OCI IPAM Troubleshooting Guide
+# OCI IPAM Troubleshooting Guide
 
-Comprehensive troubleshooting guide for Cilium OCI IPAM issues.
-
-**Version**: Cilium v1.15.2  
-**Last Updated**: October 27, 2025
-
----
+This guide helps you diagnose and resolve common issues with Cilium OCI IPAM.
 
 ## Table of Contents
 
-- [Diagnostic Tools](#diagnostic-tools)
-- [Common Issues](#common-issues)
-- [IAM and Permissions](#iam-and-permissions)
-- [VNIC Issues](#vnic-issues)
-- [IP Allocation Issues](#ip-allocation-issues)
-- [Subnet Tags Issues](#subnet-tags-issues)
+- [Initial Setup Issues](#initial-setup-issues)
+- [Authentication and Authorization](#authentication-and-authorization)
+- [VNIC and IP Allocation](#vnic-and-ip-allocation)
 - [Network Connectivity](#network-connectivity)
 - [Performance Issues](#performance-issues)
+- [Debugging Tools](#debugging-tools)
 
 ---
 
-## Diagnostic Tools
+## Initial Setup Issues
 
-### Essential Commands
+### Issue: Operator fails to start with "OCI VCN ID is required"
 
-```bash
-# 1. Check Cilium status
-cilium status
-
-# 2. List CiliumNodes
-kubectl get ciliumnode
-
-# 3. View specific node details
-kubectl get ciliumnode <node-name> -o yaml
-
-# 4. Check VNIC information
-kubectl get ciliumnode <node-name> -o jsonpath='{.status.oci.vnics}' | jq
-
-# 5. Operator logs
-kubectl logs -n kube-system deployment/cilium-operator --tail=100
-
-# 6. Agent logs (specific node)
-kubectl logs -n kube-system daemonset/cilium -c cilium-agent \
-  -l kubernetes.io/hostname=<node-name> --tail=100
-
-# 7. Check IAM permissions
-oci iam region list --auth instance_principal
-
-# 8. Pod events
-kubectl describe pod <pod-name>
+**Symptoms:**
+```
+level=error msg="OCI VCN ID is required but not configured. Please set --oci-vcn-id operator flag"
 ```
 
-### Diagnostic Script
+**Cause:** The `--oci-vcn-id` flag is not set in operator configuration.
 
-```bash
-#!/bin/bash
-# save as: diagnose-cilium-oci.sh
+**Solution:**
 
-echo "=== Cilium Status ==="
-cilium status
+1. **Get your VCN OCID from OCI Console:**
+   ```bash
+   oci network vcn list --compartment-id <your-compartment-id>
+   ```
 
-echo ""
-echo "=== CiliumNodes ==="
-kubectl get ciliumnode -o wide
+2. **Update Helm values:**
+   ```yaml
+   operator:
+     extraArgs:
+       - --oci-vcn-id=ocid1.vcn.oc1.phx.aaaaaa...
+   ```
 
-echo ""
-echo "=== Operator Logs (last 50 lines) ==="
-kubectl logs -n kube-system deployment/cilium-operator --tail=50
-
-echo ""
-echo "=== Agent Pods ==="
-kubectl get pods -n kube-system -l k8s-app=cilium
-
-echo ""
-echo "=== Failed Pods (if any) ==="
-kubectl get pods -A --field-selector=status.phase!=Running,status.phase!=Succeeded
-
-echo ""
-echo "=== Recent Events ==="
-kubectl get events -A --sort-by='.lastTimestamp' | tail -20
-```
-
-Run: `chmod +x diagnose-cilium-oci.sh && ./diagnose-cilium-oci.sh`
+3. **Upgrade Cilium:**
+   ```bash
+   helm upgrade cilium cilium/cilium -n kube-system -f values.yaml
+   ```
 
 ---
 
-## Common Issues
+### Issue: "failed to search VCN resources" error
 
-### Issue 1: Pods Stuck in ContainerCreating
-
-#### Symptoms
-
+**Symptoms:**
 ```
-NAME                     READY   STATUS              RESTARTS   AGE
-test-pod-12345-abcde     0/1     ContainerCreating   0          2m
+level=error msg="failed to search VCN resources: Service error:NotAuthenticated"
 ```
 
-#### Diagnosis
+**Cause:** Operator cannot authenticate to OCI API.
 
-```bash
-# 1. Check pod events
-kubectl describe pod <pod-name>
+**Solutions:**
 
-# Look for errors like:
-# "Failed to create pod sandbox: IP allocation failed"
-# "Waiting for IP address"
+**If using Instance Principals:**
 
-# 2. Check CiliumNode status
-kubectl get ciliumnode <node-name> -o yaml
+1. **Verify instance is in dynamic group:**
+   ```bash
+   # Check instance OCID
+   oci compute instance list --compartment-id <compartment-id>
+   
+   # Verify dynamic group includes this instance
+   oci iam dynamic-group get --dynamic-group-id <group-id>
+   ```
 
-# 3. Check Operator logs
-kubectl logs -n kube-system deployment/cilium-operator | grep -i "error\|failed"
-```
+2. **Check IAM policies:**
+   ```hcl
+   Allow dynamic-group cilium-operator-group to read virtual-network-family in compartment <name>
+   Allow dynamic-group cilium-operator-group to manage vnics in compartment <name>
+   ```
 
-#### Possible Causes and Solutions
+**If using config file:**
 
-**Cause 1: IP Address Exhaustion**
+1. **Set authentication mode:**
+   ```yaml
+   OCIUseInstancePrincipal: false
+   ```
 
-```bash
-# Check IP usage
-kubectl get ciliumnode <node> -o jsonpath='{.status.oci.vnics}' | jq
-
-# Look for: allocated-ips >= available-ips
-```
-
-**Solution**:
-- Expand subnet CIDR (use /24 instead of /28)
-- Add more subnets with Subnet Tags
-- Delete unused Pods to free IPs
-
-**Cause 2: IAM Permission Issues**
-
-```bash
-# Test permissions
-oci iam region list --auth instance_principal
-
-# Should return region list, not "Unauthorized"
-```
-
-**Solution**:
-- Check Dynamic Group includes your instances
-- Verify Policy statements (see [IAM section](#iam-and-permissions))
-
-**Cause 3: VNIC Limit Reached**
-
-```bash
-# Check VNIC count
-kubectl get ciliumnode <node> -o jsonpath='{.status.oci.vnics}' | jq 'length'
-
-# Compare with instance shape limit
-```
-
-**Solution**:
-- Upgrade to instance shape with more VNICs
-- Use larger subnets to reduce VNIC need
+2. **Verify config file exists on operator pod:**
+   ```bash
+   kubectl exec -n kube-system deployment/cilium-operator -- cat ~/.oci/config
+   ```
 
 ---
 
-### Issue 2: Operator Crashes or Restarts
+### Issue: "empty shape list returned by ListShapes"
 
-#### Symptoms
-
-```bash
-kubectl get pods -n kube-system -l name=cilium-operator
-
-# Shows frequent restarts
+**Symptoms:**
+```
+level=error msg="empty shape list returned by ListShapes"
 ```
 
-#### Diagnosis
+**Cause:** Operator cannot query compute shapes, usually due to missing permissions.
 
-```bash
-# Check Operator logs
-kubectl logs -n kube-system deployment/cilium-operator --previous
+**Solution:**
 
-# Check resource usage
-kubectl top pod -n kube-system -l name=cilium-operator
-```
+1. **Add compute permissions to IAM policy:**
+   ```hcl
+   Allow dynamic-group cilium-operator-group to read compute-management-family in compartment <name>
+   ```
 
-#### Possible Causes
-
-**Cause 1: Out of Memory**
-
-**Solution**: Increase Operator memory:
-
-```yaml
-operator:
-  resources:
-    requests:
-      memory: 512Mi
-    limits:
-      memory: 1Gi
-```
-
-**Cause 2: OCI API Rate Limiting**
-
-Look for: "Rate limit exceeded" in logs
-
-**Solution**: Increase `ipAllocationTimeout` and add backoff:
-
-```yaml
-oci:
-  ipAllocationTimeout: 120
-```
+2. **Restart operator:**
+   ```bash
+   kubectl rollout restart -n kube-system deployment/cilium-operator
+   ```
 
 ---
 
-### Issue 3: Agent Pod CrashLoopBackOff
+## Authentication and Authorization
 
-#### Symptoms
+### Issue: "failed to create instance principal config provider"
 
-```bash
-kubectl get pods -n kube-system -l k8s-app=cilium
-
-# Shows CrashLoopBackOff
+**Symptoms:**
+```
+level=error msg="failed to create instance principal config provider: failed to get instance metadata"
 ```
 
-#### Diagnosis
+**Diagnostic Steps:**
 
-```bash
-# Check logs
-kubectl logs -n kube-system daemonset/cilium -c cilium-agent --tail=100
+1. **Check metadata service accessibility:**
+   ```bash
+   # From a node
+   curl -H "Authorization: Bearer Oracle" http://169.254.169.254/opc/v2/instance/
+   ```
 
-# Check if it's a specific node
-kubectl get pods -n kube-system -l k8s-app=cilium -o wide
-```
+2. **Verify instance metadata:**
+   ```bash
+   kubectl exec -n kube-system <cilium-operator-pod> -- \
+     curl -H "Authorization: Bearer Oracle" \
+     http://169.254.169.254/opc/v2/instance/id
+   ```
 
-#### Solutions
+**Solutions:**
 
-**Issue**: BPF filesystem not mounted
+1. **Ensure operator pod has host network access** (not required by default, but helps debug):
+   ```yaml
+   operator:
+     hostNetwork: false  # Usually false is correct
+   ```
 
-**Solution**: Ensure BPF is mounted on nodes:
+2. **Check dynamic group matching rule:**
+   ```hcl
+   # Match all instances in compartment
+   ALL {instance.compartment.id = 'ocid1.compartment.oc1..xxx'}
+   
+   # OR match by tag
+   ALL {tag.namespace.key = 'value'}
+   ```
 
-```bash
-# On the problematic node
-mount | grep /sys/fs/bpf
-
-# If not mounted
-mount bpffs -t bpf /sys/fs/bpf
-```
+3. **Fallback to config file auth:**
+   ```yaml
+   OCIUseInstancePrincipal: false
+   ```
 
 ---
 
-## IAM and Permissions
+### Issue: "Service error:NotAuthorizedOrNotFound"
 
-### Issue: "Unauthorized" or "Forbidden" Errors
-
-#### Symptoms
-
-Operator logs show:
+**Symptoms:**
 ```
-level=error msg="Failed to list subnets" error="Unauthorized"
+level=error msg="Service error:NotAuthorizedOrNotFound. The requested resource is not found or you are not authorized to access it"
 ```
 
-#### Diagnosis
+**Cause:** Missing IAM permissions or resource doesn't exist in specified compartment.
 
-```bash
-# Test Instance Principal
-oci iam region list --auth instance_principal
+**Solution:**
 
-# If this fails, IAM is not configured correctly
-```
+1. **Verify all required policies exist:**
+   ```hcl
+   # Virtual Network permissions
+   Allow dynamic-group cilium-operator-group to manage vnics in compartment <name>
+   Allow dynamic-group cilium-operator-group to use subnets in compartment <name>
+   Allow dynamic-group cilium-operator-group to use private-ips in compartment <name>
+   Allow dynamic-group cilium-operator-group to read virtual-network-family in compartment <name>
+   
+   # Compute permissions
+   Allow dynamic-group cilium-operator-group to read compute-management-family in compartment <name>
+   Allow dynamic-group cilium-operator-group to read instances in compartment <name>
+   
+   # Search permissions
+   Allow dynamic-group cilium-operator-group to read search-resources in tenancy
+   ```
 
-#### Solutions
+2. **Verify VCN exists in the correct compartment:**
+   ```bash
+   oci network vcn get --vcn-id <your-vcn-id>
+   ```
 
-**Step 1: Verify Dynamic Group**
-
-OCI Console → Identity → Dynamic Groups
-
-Check matching rules include your instances:
-
-```
-instance.compartment.id = 'ocid1.compartment.oc1..aaaaaaaa...'
-```
-
-Or for specific instances:
-
-```
-matching_instance_id = 'ocid1.instance.oc1.region.anzxsljr...'
-```
-
-**Step 2: Verify Policy**
-
-OCI Console → Identity → Policies
-
-Ensure these statements exist:
-
-```
-Allow dynamic-group cilium-oci-ipam to manage vnics in compartment <compartment-name>
-Allow dynamic-group cilium-oci-ipam to use subnets in compartment <compartment-name>
-Allow dynamic-group cilium-oci-ipam to use network-security-groups in compartment <compartment-name>
-Allow dynamic-group cilium-oci-ipam to use private-ips in compartment <compartment-name>
-```
-
-**Step 3: Check Policy Scope**
-
-- Policy must be in the **same compartment** or parent compartment as VCN
-- Use `manage vnics` not just `use vnics`
-
-**Step 4: Wait for Propagation**
-
-IAM changes take 1-2 minutes to propagate. Wait and retry.
-
-### Required IAM Permissions
-
-| Permission | Purpose |
-|------------|---------|
-| `manage vnics` | Create, attach, detach VNICs |
-| `use subnets` | Query subnet information |
-| `use network-security-groups` | Apply NSGs to VNICs |
-| `use private-ips` | Allocate secondary IPs |
+3. **Check compartment hierarchy:**
+   - Policies may need to be at parent compartment level
+   - Use `in tenancy` if resources span multiple compartments
 
 ---
 
-## VNIC Issues
+## VNIC and IP Allocation
 
-### Issue: VNICs Not Created Automatically
+### Issue: "unable to find matching subnet"
 
-#### Symptoms
-
-- IP usage is high but no new VNICs created
-- Operator logs show subnet selection but no VNIC creation
-
-#### Diagnosis
-
-```bash
-# Check current VNICs
-kubectl get ciliumnode <node> -o jsonpath='{.status.oci.vnics}' | jq
-
-# Check Operator logs
-kubectl logs -n kube-system deployment/cilium-operator | grep -i "vnic\|subnet"
+**Symptoms:**
+```
+level=error msg="unable to find matching subnet available for interface creation"
 ```
 
-#### Possible Causes
+**Diagnostic Steps:**
 
-**Cause 1: Subnet Tags Not Configured**
+1. **List available subnets:**
+   ```bash
+   oci network subnet list \
+     --compartment-id <compartment-id> \
+     --vcn-id <vcn-id>
+   ```
 
-```bash
-# Check Operator args
-kubectl logs -n kube-system deployment/cilium-operator | grep subnet-tags-filter
+2. **Check subnet available IPs:**
+   ```bash
+   oci network subnet get --subnet-id <subnet-id> \
+     --query 'data.{"CIDR":"cidr-block","Available":"available-ip-address-count"}'
+   ```
 
-# If you see: --subnet-tags-filter=''
-# Then Subnet Tags are not configured correctly
-```
+**Common Causes:**
 
-**Solution**: See [Subnet Tags Issues](#subnet-tags-issues)
+1. **All subnets are full:**
+   - Each subnet reserves 3 IPs for OCI
+   - Available IPs = Total IPs - Used IPs - 3
+   
+   **Solution:** Create additional subnets or expand existing ones
 
-**Cause 2: Instance VNIC Limit Reached**
+2. **Availability domain mismatch:**
+   - Node is in AD-1 but subnets are in AD-2
+   
+   **Solution:** Use regional subnets or create AD-specific subnets
 
-```bash
-# Count current VNICs
-kubectl get ciliumnode <node> -o jsonpath='{.status.oci.vnics}' | jq 'length'
-```
-
-**Solution**: Upgrade instance shape or delete unused VNICs
-
-**Cause 3: No Available Subnets**
-
-**Solution**: 
-- Create more subnets in your VCN
-- Tag subnets with correct tags
-- Ensure subnets have available IPs
+3. **Subnet tags don't match:**
+   ```yaml
+   # CiliumNode expects these tags
+   spec:
+     oci:
+       subnet-tags:
+         environment: production  # Must match subnet tags
+   ```
+   
+   **Solution:** Remove subnet-tags requirement or add tags to subnets
 
 ---
 
-### Issue: Multiple VNICs Created Unexpectedly
+### Issue: Pods stuck in "ContainerCreating" state
 
-#### Symptoms
-
-Expected 1 additional VNIC, but 2+ were created
-
-#### Root Cause
-
-This happens when:
-1. Using small subnets (/28 = 13 IPs)
-2. Cilium's surge allocation tries to allocate 14+ IPs
-3. First subnet exhausted → creates VNIC1
-4. Second subnet exhausted → creates VNIC2
-
-#### Solution
-
-✅ **Use /24 or larger subnets** (250+ IPs)
-
+**Symptoms:**
 ```bash
-# Check your subnet sizes
-oci network subnet get --subnet-id <subnet-ocid> --query 'data."cidr-block"'
+kubectl get pods
+NAME          READY   STATUS              RESTARTS   AGE
+nginx-xxx     0/1     ContainerCreating   0          2m
 ```
 
-Recommended subnet sizes:
+**Diagnostic Steps:**
 
-| Size | Usable IPs | Recommended For |
-|------|-----------|-----------------|
-| /28 | 13 | ❌ Too small |
-| /27 | 29 | ⚠️ Development only |
-| /26 | 61 | ⚠️ Small clusters |
-| /24 | 251 | ✅ Production (recommended) |
-| /23 | 509 | ✅ Large clusters |
+1. **Check pod events:**
+   ```bash
+   kubectl describe pod <pod-name>
+   # Look for: "failed to allocate IP"
+   ```
+
+2. **Check CiliumNode status:**
+   ```bash
+   kubectl get ciliumnode <node-name> -o jsonpath='{.status.ipam}' | jq
+   ```
+
+3. **Check operator logs:**
+   ```bash
+   kubectl logs -n kube-system deployment/cilium-operator | grep -i "error\|fail"
+   ```
+
+**Solutions:**
+
+1. **VNIC limit reached:**
+   ```bash
+   # Check current VNIC count
+   kubectl get ciliumnode <node-name> -o jsonpath='{.status.oci.vnics}' | jq 'length'
+   ```
+   
+   **Solution:** 
+   - Drain node and move pods elsewhere
+   - Use larger instance shape with more VNIC capacity
+
+2. **IP allocation timeout:**
+   ```bash
+   # Check recent allocations
+   kubectl logs -n kube-system deployment/cilium-operator | grep "AssignPrivateIPAddresses"
+   ```
+   
+   **Solution:** Increase operator timeout settings
+
+3. **Subnet exhaustion:**
+   **Solution:** Add more subnets to VCN
 
 ---
 
-### Issue: VNIC Creation Stuck
+### Issue: "unable to attach VNIC" or "Wait for VNIC attach failed"
 
-#### Symptoms
-
-Operator logs show "Creating VNIC..." but never completes
-
-#### Diagnosis
-
-```bash
-# Check Operator logs
-kubectl logs -n kube-system deployment/cilium-operator | grep "Creating VNIC"
-
-# Check OCI Console for VNIC attachment status
+**Symptoms:**
+```
+level=error msg="unable to attach VNIC: Service error:LimitExceeded"
 ```
 
-#### Solutions
+**Causes:**
 
-**Timeout Issue**: Increase timeout:
+1. **Instance shape VNIC limit reached**
+2. **Subnet service limits exceeded**
+3. **Concurrent attachment conflicts**
 
-```yaml
-oci:
-  ipAllocationTimeout: 120  # 2 minutes
-```
+**Solutions:**
 
-**OCI API Issue**: Check OCI service health dashboard
+1. **Check instance shape limits:**
+   ```bash
+   # Get instance shape
+   kubectl get ciliumnode <node-name> -o jsonpath='{.spec.oci.instance-type}'
+   
+   # Check shape limits
+   oci compute shape list --compartment-id <compartment-id> \
+     --query "data[?shape=='VM.Standard.E4.Flex'].{Shape:shape,VNICs:\"max-vnic-attachments\"}"
+   ```
+
+2. **Check service limits:**
+   ```bash
+   oci limits value list \
+     --compartment-id <compartment-id> \
+     --service-name compute
+   ```
+
+3. **Request limit increase** via OCI Console
+
+4. **Use larger shapes:**
+   ```yaml
+   # For node pools or instance configurations
+   shape: VM.Standard.E4.Flex
+   shape-config:
+     ocpus: 8  # More OCPUs = more VNICs
+   ```
 
 ---
 
-## IP Allocation Issues
+### Issue: High VNIC creation rate (cost concern)
 
-### Issue: "No More IPs Available"
+**Symptoms:**
+- Many VNICs with few IPs each
+- Unnecessary VNIC churn
 
-#### Symptoms
+**Solutions:**
 
-```
-level=error msg="Unable to assign additional IPs to interface"
-error="All IPs have already been allocated"
-```
+1. **Increase IP pre-allocation:**
+   ```yaml
+   operator:
+     extraArgs:
+       - --oci-vcn-id=ocid1.vcn.oc1.phx.xxx
+       - --nodes-ipam-pod-cidr-allocation-threshold=10  # Pre-allocate 10 IPs
+   ```
 
-#### Diagnosis
+2. **Adjust release threshold:**
+   ```yaml
+   operator:
+     extraArgs:
+       - --nodes-ipam-pod-cidr-release-threshold=5  # Keep 5 free IPs
+   ```
 
-```bash
-# Check subnet IP usage
-kubectl get ciliumnode <node> -o jsonpath='{.status.oci.vnics}' | \
-  jq '.[] | {subnet: .subnet.cidr, allocated: ."allocated-ips", available: ."available-ips"}'
-```
-
-#### Solutions
-
-**Solution 1: Expand Subnet**
-
-Can't expand existing subnet, must create new one:
-
-```bash
-# Create larger subnet
-oci network subnet create \
-  --compartment-id <compartment-ocid> \
-  --vcn-id <vcn-ocid> \
-  --cidr-block "10.0.10.0/24" \
-  --display-name "cilium-pod-subnet-large" \
-  --freeform-tags '{"cilium-pod-network":"yes"}' \
-  --auth instance_principal
-```
-
-**Solution 2: Delete Unused Pods**
-
-```bash
-# Find completed/failed pods
-kubectl get pods -A --field-selector=status.phase=Succeeded
-kubectl get pods -A --field-selector=status.phase=Failed
-
-# Delete them to free IPs
-kubectl delete pod <pod-name> -n <namespace>
-```
-
----
-
-### Issue: IP Allocation Slow
-
-#### Symptoms
-
-Pods take >5 seconds to get IP addresses
-
-#### Diagnosis
-
-```bash
-# Check allocation latency in Operator logs
-kubectl logs -n kube-system deployment/cilium-operator | grep "IP allocation"
-```
-
-#### Solutions
-
-**Enable VNIC Pre-allocation**:
-
-```yaml
-oci:
-  vnicPreAllocationThreshold: 0.7  # Pre-create at 70%
-```
-
-**Increase Operator Resources**:
-
-```yaml
-operator:
-  resources:
-    requests:
-      cpu: 1000m
-      memory: 1Gi
-```
-
----
-
-## Subnet Tags Issues
-
-### Issue: Subnet Tags Not Working
-
-#### Symptoms
-
-- Configured `oci.subnetTags` but VNICs not created from tagged subnets
-- Operator logs show empty `--subnet-tags-filter`
-
-#### Diagnosis
-
-```bash
-# Check Operator args
-kubectl logs -n kube-system deployment/cilium-operator | head -20 | grep subnet-tags-filter
-
-# ❌ If you see: --subnet-tags-filter=''
-# ✅ Should see: --subnet-tags-filter='your-tag=value'
-```
-
-#### Root Cause
-
-**Cilium's architecture**: Agent and Operator are separate components.
-
-- `oci.subnetTags` configures the Agent (ConfigMap)
-- Operator reads its own command-line args (`operator.extraArgs`)
-- Helm Chart doesn't auto-propagate `oci.subnetTags` to Operator
-
-#### Solution
-
-**Must configure BOTH places**:
-
-```yaml
-oci:
-  subnetTags:
-    cilium-pod-network: "yes"  # Config 1: For Agent
-
-operator:
-  extraArgs:
-    - --subnet-tags-filter=cilium-pod-network=yes  # Config 2: For Operator ⚠️
-```
-
-Verify after applying:
-
-```bash
-kubectl logs -n kube-system deployment/cilium-operator | grep subnet-tags-filter
-# Should see: --subnet-tags-filter='cilium-pod-network=yes'
-```
-
----
-
-### Issue: Subnets Not Matched by Tags
-
-#### Diagnosis
-
-```bash
-# Check subnet tags
-oci network subnet get \
-  --subnet-id <subnet-ocid> \
-  --query 'data."freeform-tags"' \
-  --auth instance_principal
-
-# Should show your tags
-```
-
-#### Solutions
-
-**Add tags to subnets**:
-
-```bash
-oci network subnet update \
-  --subnet-id <subnet-ocid> \
-  --freeform-tags '{"cilium-pod-network":"yes"}' \
-  --force \
-  --auth instance_principal
-```
-
-**Verify tag format**:
-- Key: `cilium-pod-network`
-- Value: `"yes"` (string)
-- Match exactly in Operator args: `--subnet-tags-filter=cilium-pod-network=yes`
+3. **Monitor VNIC usage:**
+   ```bash
+   kubectl get ciliumnodes -o json | \
+     jq '.items[] | {name: .metadata.name, vnics: (.status.oci.vnics | length)}'
+   ```
 
 ---
 
 ## Network Connectivity
 
-### Issue: Pod-to-Pod Communication Fails
+### Issue: Pods cannot reach other pods
 
-#### Symptoms
+**Diagnostic Steps:**
 
-```bash
-kubectl exec pod1 -- ping <pod2-ip>
-# Timeout or unreachable
-```
+1. **Check pod IPs:**
+   ```bash
+   kubectl get pods -o wide
+   ```
 
-#### Diagnosis
+2. **Verify IPs are from VCN subnets:**
+   ```bash
+   # Pod IPs should be in VCN CIDR range
+   kubectl get ciliumnode <node> -o jsonpath='{.status.oci.vnics}' | jq
+   ```
 
-```bash
-# 1. Check if both Pods have IPs
-kubectl get pods -o wide
+3. **Test connectivity:**
+   ```bash
+   kubectl exec -it <pod1> -- ping <pod2-ip>
+   ```
 
-# 2. Check routing
-kubectl exec pod1 -- ip route
+**Solutions:**
 
-# 3. Check Cilium status
-cilium status
+1. **Check security lists on subnets:**
+   - Allow ingress from VCN CIDR
+   - Allow egress to VCN CIDR
 
-# 4. Use Hubble to observe flows
-hubble observe --pod pod1
-```
+2. **Verify route tables:**
+   - Ensure proper routing for pod subnets
+   - Check for conflicting routes
 
-#### Solutions
-
-**Check Security Lists/NSGs**:
-- OCI Security Lists must allow traffic between Pod subnets
-- Network Security Groups (if used) must allow Pod-to-Pod traffic
-
-**Check Cilium Network Policies**:
-```bash
-kubectl get networkpolicy -A
-```
+3. **Check Cilium policy:**
+   ```bash
+   kubectl get networkpolicies --all-namespaces
+   ```
 
 ---
 
-### Issue: Pod Cannot Reach Internet
+### Issue: Pods cannot reach external services
 
-#### Diagnosis
+**Diagnostic Steps:**
 
-```bash
-kubectl exec <pod> -- ping -c 3 8.8.8.8
-```
+1. **Test DNS resolution:**
+   ```bash
+   kubectl exec -it <pod> -- nslookup google.com
+   ```
 
-#### Solutions
+2. **Test external connectivity:**
+   ```bash
+   kubectl exec -it <pod> -- curl -I https://google.com
+   ```
 
-**Check NAT Gateway**:
-- Subnet route table must have route to NAT Gateway or Internet Gateway
-- NAT Gateway must be in AVAILABLE state
+3. **Check NAT gateway configuration:**
+   ```bash
+   oci network nat-gateway list --compartment-id <compartment-id>
+   ```
 
-**Check Masquerading**:
+**Solutions:**
 
-Ensure masquerading is enabled:
+1. **Add NAT gateway to VCN:**
+   - For pods in private subnets to reach internet
+   - Configure route table: 0.0.0.0/0 → NAT Gateway
 
-```yaml
-enableIPv4Masquerade: true
-```
+2. **Check egress rules:**
+   - Security lists must allow egress to 0.0.0.0/0
+   - Or specific destination CIDRs
+
+3. **Verify DNS:**
+   ```yaml
+   # In Cilium config
+   dnsPolicy: ClusterFirst  # Or ClusterFirstWithHostNet
+   ```
+
+---
+
+### Issue: External services cannot reach pods
+
+**Symptoms:**
+- Load balancer health checks fail
+- Direct pod access from VCN doesn't work
+
+**Solutions:**
+
+1. **Verify security lists allow inbound traffic:**
+   ```hcl
+   # Security List rule
+   Source: 0.0.0.0/0 (or specific CIDR)
+   Protocol: TCP
+   Destination Port: <service-port>
+   ```
+
+2. **Check service type:**
+   ```bash
+   kubectl get svc
+   # Type should be LoadBalancer for external access
+   ```
+
+3. **Verify pod IP is reachable:**
+   ```bash
+   # From another OCI instance in same VCN
+   ping <pod-ip>
+   ```
 
 ---
 
 ## Performance Issues
 
-### Issue: High Operator CPU Usage
+### Issue: Slow pod startup times
 
-#### Diagnosis
+**Symptoms:**
+- Pods take >30 seconds to get IP addresses
+- Frequent VNIC creation
 
+**Diagnostic Steps:**
+
+1. **Check VNIC allocation time:**
+   ```bash
+   kubectl logs -n kube-system deployment/cilium-operator | \
+     grep "Attached VNIC" | tail -20
+   ```
+
+2. **Monitor IPAM metrics:**
+   ```bash
+   kubectl port-forward -n kube-system deployment/cilium-operator 9963:9963
+   curl http://localhost:9963/metrics | grep ipam
+   ```
+
+**Solutions:**
+
+1. **Pre-allocate IPs:**
+   ```yaml
+   operator:
+     extraArgs:
+       - --nodes-ipam-pod-cidr-allocation-threshold=15
+       - --parallel-alloc-workers=10
+   ```
+
+2. **Use multiple subnets:**
+   - Distribute load across subnets
+   - Reduces contention
+
+3. **Right-size instance shapes:**
+   - Use shapes with more VNIC capacity
+   - Fewer VNIC creations needed
+
+---
+
+### Issue: Operator consuming high CPU/memory
+
+**Symptoms:**
 ```bash
-kubectl top pod -n kube-system -l name=cilium-operator
+kubectl top pods -n kube-system | grep cilium-operator
+# Shows high CPU or memory usage
 ```
 
-#### Solutions
+**Solutions:**
 
-**Increase resources**:
+1. **Adjust resource limits:**
+   ```yaml
+   operator:
+     resources:
+       limits:
+         cpu: 2000m
+         memory: 2Gi
+       requests:
+         cpu: 200m
+         memory: 256Mi
+   ```
+
+2. **Reduce reconciliation frequency:**
+   ```yaml
+   operator:
+     extraArgs:
+       - --nodes-ipam-sync-interval=60s  # Default: 30s
+   ```
+
+3. **Check for error loops:**
+   ```bash
+   kubectl logs -n kube-system deployment/cilium-operator | \
+     grep -i error | sort | uniq -c | sort -rn
+   ```
+
+---
+
+## Debugging Tools
+
+### Collect Operator Logs
+
+```bash
+# Last 1000 lines
+kubectl logs -n kube-system deployment/cilium-operator --tail=1000
+
+# With timestamps
+kubectl logs -n kube-system deployment/cilium-operator --timestamps=true
+
+# Follow logs
+kubectl logs -n kube-system deployment/cilium-operator -f
+
+# Previous pod (if crashed)
+kubectl logs -n kube-system deployment/cilium-operator --previous
+```
+
+### Inspect CiliumNode Resources
+
+```bash
+# List all nodes
+kubectl get ciliumnodes
+
+# Full YAML of a node
+kubectl get ciliumnode <node-name> -o yaml
+
+# Just OCI status
+kubectl get ciliumnode <node-name> -o jsonpath='{.status.oci}' | jq
+
+# IPAM status
+kubectl get ciliumnode <node-name> -o jsonpath='{.status.ipam}' | jq
+
+# Check all nodes' VNIC counts
+kubectl get ciliumnodes -o json | \
+  jq -r '.items[] | "\(.metadata.name): \(.status.oci.vnics | length) VNICs"'
+```
+
+### Check OCI Resources
+
+```bash
+# List VNICs for an instance
+oci compute vnic-attachment list \
+  --compartment-id <compartment-id> \
+  --instance-id <instance-id>
+
+# Get VNIC details
+oci network vnic get --vnic-id <vnic-id>
+
+# List private IPs on a VNIC
+oci network private-ip list --vnic-id <vnic-id>
+
+# Check subnet capacity
+oci network subnet get --subnet-id <subnet-id> | \
+  jq '.data | {cidr: ."cidr-block", available: ."available-ip-address-count"}'
+```
+
+### Enable Debug Logging
 
 ```yaml
+# In Helm values
+debug:
+  enabled: true
+  
 operator:
-  resources:
-    requests:
-      cpu: 1000m
-      memory: 1Gi
-    limits:
-      cpu: 2000m
-      memory: 2Gi
+  extraArgs:
+    - --oci-vcn-id=ocid1.vcn.oc1.phx.xxx
+    - --debug=true
 ```
 
-**Reduce log verbosity**:
-
-Remove `--debug` from `operator.extraArgs` if present.
-
----
-
-### Issue: Slow Pod Creation
-
-#### Symptoms
-
-Pods take >30 seconds to start
-
-#### Diagnosis
+### Cilium CLI Debugging
 
 ```bash
-# Time Pod creation
-time kubectl run test --image=nginx
+# Install Cilium CLI
+curl -L --remote-name-all https://github.com/cilium/cilium-cli/releases/latest/download/cilium-linux-amd64.tar.gz
+tar xzvf cilium-linux-amd64.tar.gz
+sudo mv cilium /usr/local/bin/
 
-# Check Operator response time
-kubectl logs -n kube-system deployment/cilium-operator | grep "IP allocation"
+# Check status
+cilium status
+
+# Connectivity test
+cilium connectivity test
+
+# Debug information
+cilium sysdump
 ```
 
-#### Solutions
-
-**Pre-allocate VNICs**:
-
-```yaml
-oci:
-  vnicPreAllocationThreshold: 0.7
-```
-
-**Increase API timeout**:
-
-```yaml
-oci:
-  ipAllocationTimeout: 120
-```
-
----
-
-## Getting Help
-
-### Information to Collect
-
-When requesting support, collect:
+### Network Troubleshooting
 
 ```bash
-# 1. Cilium version
-helm list -n kube-system
+# From a pod - test connectivity
+kubectl run -it --rm debug --image=nicolaka/netshoot --restart=Never -- /bin/bash
 
-# 2. Configuration
-helm get values cilium -n kube-system > cilium-values.yaml
-
-# 3. CiliumNode status
-kubectl get ciliumnode -o yaml > ciliumnodes.yaml
-
-# 4. Operator logs
-kubectl logs -n kube-system deployment/cilium-operator --tail=500 > operator.log
-
-# 5. Agent logs (problematic node)
-kubectl logs -n kube-system daemonset/cilium -c cilium-agent \
-  -l kubernetes.io/hostname=<node> --tail=500 > agent.log
-
-# 6. Recent events
-kubectl get events -A --sort-by='.lastTimestamp' > events.txt
-
-# 7. Failing Pod describe
-kubectl describe pod <failing-pod> > pod-describe.txt
+# Inside the debug pod:
+ping <pod-ip>
+traceroute <pod-ip>
+nslookup <service-name>
+curl <service-url>
+ip addr
+ip route
 ```
 
-### Contact
+### Verify OCI API Access
 
- 
-- **GitHub Issues**: https://github.com/iafboy/oci_cilium/issues
- 
+```bash
+# Execute in operator pod
+kubectl exec -n kube-system deployment/cilium-operator -it -- /bin/bash
+
+# Inside pod:
+# Check metadata access
+curl -H "Authorization: Bearer Oracle" \
+  http://169.254.169.254/opc/v2/instance/
+
+# Test instance principal (if using)
+export OCI_CLI_AUTH=instance_principal
+oci iam region list
+```
 
 ---
 
-## Quick Reference
+## Common Error Messages Reference
 
-### Diagnostic Flowchart
-
-```
-Pod stuck in ContainerCreating?
-  │
-  ├─→ Check kubectl describe pod
-  │     │
-  │     ├─→ "IP allocation failed"
-  │     │     └─→ Check CiliumNode VNIC IPs
-  │     │           ├─→ All IPs used? → Expand subnets
-  │     │           └─→ No VNICs? → Check IAM permissions
-  │     │
-  │     └─→ "Waiting for sandbox"
-  │           └─→ Check Agent logs
-  │
-  └─→ Check Operator logs
-        ├─→ "Unauthorized" → IAM issue
-        ├─→ "subnet-tags-filter=''" → Missing operator.extraArgs
-        └─→ "VNIC limit reached" → Upgrade instance shape
-```
-
-### Common Log Messages
-
-| Log Message | Meaning | Action |
-|-------------|---------|--------|
-| `All X non-reserved IP addresses have been allocated` | Subnet full | Expand subnet or add new one |
-| `Unauthorized` / `Forbidden` | IAM issue | Check Dynamic Group and Policy |
-| `Unable to assign additional IPs to interface` | VNIC full or subnet full | Create new VNIC or expand subnet |
-| `VNIC limit reached` | Instance shape limit | Upgrade instance shape |
-| `subnet-tags-filter=''` | Subnet Tags misconfigured | Add `operator.extraArgs` |
+| Error Message | Likely Cause | Quick Fix |
+|---------------|--------------|-----------|
+| `OCI VCN ID is required` | Missing --oci-vcn-id flag | Add flag to operator args |
+| `NotAuthenticated` | IAM auth failure | Check instance principals/policies |
+| `NotAuthorizedOrNotFound` | Missing permissions | Add required IAM policies |
+| `LimitExceeded` | VNIC or IP limit reached | Use larger shape or request limit increase |
+| `unable to find matching subnet` | No suitable subnet | Check subnet capacity and tags |
+| `failed to create instance principal` | Not in dynamic group | Add instance to dynamic group |
+| `empty shape list` | Missing compute permissions | Add compute read permissions |
+| `WaitVNICAttached timeout` | VNIC attachment slow | Check OCI service status |
 
 ---
 
-**Version**: 1.0  
-**Last Updated**: October 27, 2025  
-**Maintainer**: Dengwei (SEHUB)
+## Getting More Help
+
+1. **Increase Log Verbosity:**
+   ```yaml
+   debug:
+     enabled: true
+     verbose: datapath  # Or: flow, kvstore, envoy, etc.
+   ```
+
+2. **Collect Support Bundle:**
+   ```bash
+   cilium sysdump
+   # Creates a zip file with all debug info
+   ```
+
+3. **Check OCI Service Health:**
+   - Visit: https://ocistatus.oraclecloud.com/
+
+4. **Community Support:**
+   - Cilium Slack: https://cilium.io/slack
+   - GitHub Issues: https://github.com/cilium/cilium/issues
+
+5. **Report Issue Template:**
+   ```
+   Environment:
+   - Cilium version: 1.15.2
+   - K8s version: 
+   - OCI region: 
+   - Instance shape: 
+   
+   Configuration:
+   - VCN OCID: 
+   - Auth method: Instance Principal / Config File
+   
+   Issue Description:
+   [Describe the problem]
+   
+   Steps to Reproduce:
+   1. 
+   2. 
+   3. 
+   
+   Logs:
+   [Paste relevant logs]
+   
+   Expected Behavior:
+   [What should happen]
+   
+   Actual Behavior:
+   [What actually happens]
+   ```
+
+---
+
+## Prevention Best Practices
+
+1. **Monitor VNIC usage** - Set up alerts before limits are reached
+2. **Use regional subnets** - More flexible than AD-specific
+3. **Right-size instance shapes** - Plan for peak pod count
+4. **Regular subnet audits** - Ensure adequate IP space
+5. **Test IAM policies** - Verify before production deployment
+6. **Document custom configurations** - For troubleshooting later
+7. **Enable metrics** - Track IPAM performance over time
+8. **Implement GitOps** - Version control all configurations
+
+---
+
+
+````
