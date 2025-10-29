@@ -90,11 +90,18 @@ matching_instance_id = 'ocid1.instance.oc1.ap-singapore-2.anzxsljrqakycgfd...'
 
 **Policy Statements**:
 ```
-Allow dynamic-group cilium-oci-ipam to manage vnics in compartment <compartment-name>
-Allow dynamic-group cilium-oci-ipam to use subnets in compartment <compartment-name>
-Allow dynamic-group cilium-oci-ipam to use network-security-groups in compartment <compartment-name>
-Allow dynamic-group cilium-oci-ipam to use private-ips in compartment <compartment-name>
+Allow dynamic-group oracleidentitycloudservice/cilium-k8s-nodes to manage vnics in compartment wei.wd.deng
+Allow dynamic-group oracleidentitycloudservice/cilium-k8s-nodes to manage vnic-attachments in compartment wei.wd.deng
+Allow dynamic-group oracleidentitycloudservice/cilium-k8s-nodes to use subnets in compartment wei.wd.deng
+Allow dynamic-group oracleidentitycloudservice/cilium-k8s-nodes to use private-ips in compartment wei.wd.deng
+Allow dynamic-group oracleidentitycloudservice/cilium-k8s-nodes to use network-security-groups in compartment wei.wd.deng
+Allow dynamic-group oracleidentitycloudservice/cilium-k8s-nodes to manage instances in compartment wei.wd.deng
+Allow dynamic-group oracleidentitycloudservice/cilium-k8s-nodes to inspect compartments in compartment wei.wd.deng
+Allow dynamic-group oracleidentitycloudservice/cilium-k8s-nodes to inspect vcns in compartment wei.wd.deng
+Allow dynamic-group oracleidentitycloudservice/cilium-k8s-nodes to read virtual-network-family in compartment wei.wd.deng
 ```
+or Allow dynamic-group 'oracleidentitycloudservice'/'cilium-k8s-nodes' to manage all-resources in compartment wei.wd.deng
+### oracleidentitycloudservice 域名
 
 #### 步骤3: 验证权限
 
@@ -712,7 +719,7 @@ tar czf cilium-debug-$(date +%Y%m%d-%H%M%S).tar.gz cilium-debug-*
 ```
 
 **联系支持**:
-- 邮箱: dengwei@xiaomi.com
+- 邮箱: 
 - 附带上面收集的诊断包
 
 ---
@@ -896,5 +903,5 @@ helm history cilium -n kube-system
 
 **文档版本**: 1.0  
 **创建时间**: 2025年10月27日  
-**维护者**: Dengwei (SEHUB)  
+**维护者**:
  
