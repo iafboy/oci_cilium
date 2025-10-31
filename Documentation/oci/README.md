@@ -375,14 +375,6 @@ Allow dynamic-group <group-name> to use private-ips in compartment <compartment>
 - [configuration.md](configuration.md) - Complete configuration reference
 - [troubleshooting.md](troubleshooting.md) - Troubleshooting guide
 
-### Additional Resources
-
-For more detailed documentation, see the `/Dengwei/` directory in the repository:
-
-- `OCI_IPAM_CUSTOMER_DEPLOYMENT_GUIDE.md` - Customer deployment guide
-- `CILIUM_OCI_IPAM_DEPLOYMENT_MANUAL.md` - Detailed deployment manual
-- `CILIUM_OCI_SUBNET_TAGS_TESTING.md` - Subnet Tags testing guide
-- `OCI_IPAM_MIGRATION_COMPLETE_SUMMARY.md` - Complete project summary
 
 ---
 
@@ -412,4 +404,4 @@ This documentation and the Cilium OCI IPAM feature are licensed under Apache 2.0
 
 **Version**: 2.0  
 **Last Updated**: October 27, 2025  
-**Maintainer**: Dengwei (SEHUB)
+
