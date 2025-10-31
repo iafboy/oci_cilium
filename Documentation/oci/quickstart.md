@@ -423,7 +423,7 @@ helm rollback cilium -n kube-system
 
 **Congratulations!** You've successfully deployed Cilium with OCI IPAM. 🎉
 
-For questions or issues, contact: dengwei@xiaomi.com
+
 
 ---
 
